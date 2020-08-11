@@ -1,0 +1,16 @@
+*csv
+*png
+!Post-Processing/Figures/*
+Materials/
+*.pyc
+Pilot/
+Post-Processing/Temp/*
+*.Rhistory
+*.rds
+*tmp
+*json
+*feather
+*nb.html
+Processing/CACHEDIR/*
+*svg
+*rda

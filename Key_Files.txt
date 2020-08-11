@@ -1,0 +1,22 @@
+key files for straights and bends:
+
+python:
+
+
+main_pipeline.py (and associated files - for processing eyetracking and steering data together).
+plot_perspective_view.py (fig 2 - annotated track; appendix fig)
+plot_gaze_density_perspective.py (fig 3 - density overlaid on screenshots).
+gaze_through_midline_densities.py (fig 5 - heatmap track)
+linmix.py (fig 7 - fitting example)
+linmix_inference.py (fig 8 - post-cluster individual means).
+
+
+
+R:
+
+overall_th_diffs.rmd (fig 6 - pre-cluster inferences)
+manuscript_figs_postcluster.rmd (fig 9 - post-cluster means and contrasts) 
+sawtooth_analysis.rmd (figs 10 - 12, waypoint inferences and analysis).
+
+
+key files for slalom:

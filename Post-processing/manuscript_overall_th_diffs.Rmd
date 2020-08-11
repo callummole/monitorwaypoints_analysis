@@ -1,0 +1,391 @@
+---
+title: 'Bayes Inference of Pooled Time Headway '
+author: "Callum Mole"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    fig_caption: yes
+  pdf_document:
+    fig_caption: yes
+  word_document:
+    fig_caption: yes
+---
+
+
+```{r, Load preliminaries, include=FALSE, warning=FALSE}
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(brms)
+library(tidybayes)
+library(ggplot2)
+library(BH)
+library(ggridges)
+library(feather)
+library(HDInterval)
+library(cowplot)
+library(bayestestR)
+
+
+#theme for plots on TRANSITION grant.
+
+#from matplotlib tab10 color cycle.
+#blue and red from matplotlib tab10 default color cycle.
+#red = #d62728
+#blue = #1f77b4
+
+#orange = #ff7f0e
+#green = #2ca02c
+#purple = #9467bd
+#pink = #e377c2
+
+active_color = rgb(3, 238, 255, maxColorValue = 255)
+passive_color = '#ff7f0e' #rgb(255, 196, 3, maxColorValue = 255)
+stock_color = rgb(255, 3, 121, maxColorValue = 255)
+
+theme_trout1 <- theme_classic() +
+  theme(strip.background = element_rect(fill=NA,color=NA), 
+        text = element_text(family = "sans", size = 10),
+        axis.text = element_text(family = "sans", size = 8),
+        axis.title = element_text(family = "sans", size = 10),
+        legend.key = element_blank(),
+        panel.grid.major.y = element_line(color="grey85",size=.2, linetype = 2),
+       # panel.border = element_rect(colour = "black", fill=NA, size=.4),
+        legend.background = element_blank(),
+        panel.background = element_blank())
+       # axis.line = element_blank())
+
+text_multiplier <- ggplot2:::.pt
+ansize = 8/text_multiplier
+```
+
+
+```{r, Load data, echo=FALSE, message=FALSE, warning=FALSE}
+
+setwd("C:/git_repos/Trout18_Analysis/Post-Processing/")
+
+data <- read_feather("../Data/trout_subset_3.feather")  
+
+data <- filter(data, drivingmode < 3 & roadsection < 2 & T0_on_screen == 0 & confidence > .6 & on_srf == TRUE & dataset == 2)
+
+#should only use matched trials
+
+
+data <- data %>%
+  mutate(map_dist = sqrt(midline_vangle_dist ** 2 + midline_hangle_dist ** 2),
+         ID = ifelse((ID == "203"), "503", ID)) %>% 
+  filter(map_dist < 20)
+
+data$drivingmode <- factor(data$drivingmode)
+data$ID <- factor(data$ID)
+
+trial_means <- data %>% 
+  group_by(ID, drivingmode, trialcode) %>% 
+  summarise(med = median(th_along_midline),
+            mn = mean(th_along_midline))
+
+# assess fluctuations. and influence of varying intercepts / slopes.
+data <- mutate(data, automation = ifelse(drivingmode %in% c(1,2), 1, 0),
+                           foreign = ifelse(drivingmode %in% c(0,1), 0, 1))
+
+pp_means <- data %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med = median(th_along_midline),
+            automation = first(automation),
+            foreign = first(foreign))
+
+empirical_means <- pp_means %>% 
+  group_by(drivingmode) %>% 
+  summarise(mns = mean(med),
+            sds = sd(med),
+            automation = first(automation),
+            foreign = first(foreign))  
+
+print(empirical_means)
+```
+
+
+```{r, check distribution}
+
+ggplot(pp_means, aes(x = med, fill = factor(drivingmode))) +
+  geom_histogram(alpha = .5, position = "identity")
+
+```
+
+
+
+```{r, specify model}
+
+#we don't have enough people to reasonably specify varying effects. So let's do a single level.
+m1_form = bf(med ~ 1 + drivingmode) #only varying intercept
+#myprior = c(set_prior("normal(0,1)", class = "b"),
+ #           set_prior("student_t(3,2,1)", class = "Intercept"),
+#            set_prior("cauchy(0,1)", class = "sigma"))
+
+myprior_fix = c(set_prior("normal(2.5,2)", class = "Intercept"),
+            set_prior("normal(0,1)", class="b"),
+            set_prior("cauchy(0,1)", class="sigma"))
+            #set_prior("cauchy(0,2)", class="sd"))
+
+m1 <- brm(data = pp_means, formula = m1_form, 
+          family = gaussian(link = "identity"), prior = myprior_fix, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+summary(m1)
+plot(m1)
+pp_check(m1, nsamples = 100)
+
+m1.varint <- brm(data = pp_means, formula = bf(med ~ 1 + drivingmode + (1 | ID)), 
+          family = gaussian(link = "identity"), prior = myprior_fix, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+summary(m1.varint)
+plot(m1.varint)
+pp_check(m1.varint, nsamples = 100)
+
+loo_model_weights(m1, m1.varint)
+
+
+
+bf.add <- bf(med ~ 1 + automation + foreign)
+m.add <- brm(data = pp_means, formula = bf.add, 
+          family = gaussian(link = "identity"), prior = myprior_fix, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+summary(m.add)
+pp_check(m.add, nsamples = 100)
+loo_model_weights(m1,m.add)
+
+bf.add_re <- bf(med ~ 1 + automation + foreign + (1 + automation | ID))
+m.add_re <- brm(data = pp_means, formula = bf.add_re, 
+          family = gaussian(link = "identity"), prior = myprior_fix, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+summary(m.add_re)
+pp_check(m.add_re, nsamples = 100)
+loo_model_weights(m1, m.add_re)
+
+
+bf.intc <- bf(med ~ 0 + intercept + drivingmode)
+get_prior(bf.intc, pp_means, family = gaussian())
+m.intc <- brm(data = pp_means, formula = bf.intc, 
+          family = gaussian(link = "identity"), prior = myprior_fix, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+```
+
+```{r, random effects versions}
+#### do not use the random effects models ######
+m2_form = bf(mn ~ 1 +drivingmode + (1 + drivingmode | ID))
+
+m2 <- brm(data = tofit, formula = m2_form, 
+          family = gaussian(link = "identity"), #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+
+
+summary(m2)
+
+#doesn't converge well because there isn't much data given the parameters. stronger priors will help.
+prior_summary(m2)
+N = 10000
+
+#intercept is the active condition. Lets centre this on 2, and let it vary between approx 0 and 5.
+intprior <- data.frame(x = rnorm(N, 2.5,2))
+
+#the slope parameters may look further ahead, or closer. They definitely won't be further than a few seconds.
+bprior <- data.frame(x = rnorm(N, 0,2))
+
+#the slope parameters may look further ahead, or closer. They definitely won't be further than a few seconds.
+sigprior <- filter(data.frame(x = rcauchy(N, 0,2)), x >0)
+head(intprior)
+ggplot(intprior, aes(x = x)) + geom_histogram(fill = "blue", alpha = .5) +
+  geom_histogram(data = bprior, alpha = .5) +
+  geom_histogram(data = sigprior, fill ="red", alpha = .5) +
+  xlim(-10,10) #could print this plot out for the appendix?>
+
+
+myprior = c(set_prior("normal(2.5,2)", class = "Intercept"),
+            set_prior("normal(0,2)", class="b"),
+            set_prior("cauchy(0,2)", class="sigma"),
+            set_prior("cauchy(0,2)", class="sd"))
+
+            
+m3 <- brm(data = tofit, formula = m1_form, 
+          family = gaussian(link = "identity"), prior = myprior,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99))
+
+summary(m3)
+plot(m3)
+pp_check(m3, nsamples = 100)
+
+prior_summary(m3)
+
+```
+
+
+```{r, plot fitted individaul means}
+
+
+  
+
+
+mod = m3
+#head(tofit)
+drivingmode <- c(0,1,2)
+ID <- unique(tofit$ID)
+pred_list <- expand_grid(ID, drivingmode)
+preds <- fitted(mod, newdata=pred_list, summary=TRUE) %>% 
+  cbind(pred_list) 
+#head(preds)
+#dim(preds)
+
+drives = as.data.frame(drivingmode)
+pred_means = fitted(mod, newdata = drives, re_formula = NA, summary=TRUE) %>% 
+  cbind(drives)
+
+
+
+ggplot(preds, aes(x = ID, y = Estimate)) +
+  geom_point(col = "blue", alpha = .5) +
+  facet_wrap(~drivingmode) +
+  geom_point(data = pp_means, aes(y = mn), col = "red", fill= "white", alpha = .5, shape = 21) +
+  geom_hline(data = empirical_means, aes(yintercept = mns), col = "grey60") +
+  geom_hline(data = pred_means, aes(yintercept = Estimate), col = "blue") +
+  ylim(1.5,3.5)
+
+
+```
+
+```{r, plot pooled th}
+
+p_thpooled <- ggplot(data, aes(x = th_along_midline, group = drivingmode, colour = drivingmode)) +
+  stat_density(geom="line", position="identity") +
+  coord_cartesian(xlim = c(0, 6) , ylim = c(-.1, 1)) +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  theme_trout1 +
+    theme(legend.position = c(.8,.75),
+           legend.key.size = unit(.75,"line")) +
+  xlab("Time Headway (s)") + ylab("Density") +
+  scale_y_continuous(breaks = c(0,.25,.5,.75,1), labels = c('0','.25','.5','.75','1')) +
+  guides(fill = FALSE) +
+  geom_point(data = pp_means, aes(x = med, y = as.numeric(drivingmode)*-.03, col = factor(drivingmode)), alpha = .5, size = 1) 
+print(p_thpooled)
+
+```
+
+```{r, estimate of means}
+
+#mod <- m1.varint
+mod <- m1
+condition_means <- empirical_means %>% 
+  add_fitted_draws(mod, re_formula = NA)
+
+
+
+p_postmeans <- ggplot(condition_means, aes(x = .value, group = factor(drivingmode), fill = factor(drivingmode))) +
+  stat_density(aes(y = ..density..), geom = "density", col = NA, alpha = .5, position = "identity") +
+  #geom_histogram(col = NA, alpha = .5, position = "identity", bins = 75) +
+  coord_cartesian(xlim = c(1.75, 2.75)) +# , ylim = c(0, 1)) +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  scale_colour_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  theme_trout1 +
+    theme(legend.position = c(.8,.75),
+           legend.key.size = unit(.5,"line")) +
+  geom_vline(data = empirical_means, aes(xintercept = mns, col = factor(drivingmode)), linetype = 2) +
+  xlab("Time Headway (s)") + ylab("Density") +
+    guides(col = FALSE)
+  
+print(p_postmeans)
+
+```
+
+
+```{r, contrast plots, fig.height = 5, fig.width=7}
+
+contrast_df <- condition_means %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+contrast <- gather(contrast_df, key = "dm", value = "ct", -.draw)
+
+plt_hdis <- contrast %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+print(plt_hdis)
+p_contrast <- ggplot(plt_hdis) +
+  #geom_density_ridges(colour="grey40", fill = "white", scale=.96, rel_min_height=.005, size = 1.5)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = dm, x = ct, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1) +
+  #geom_text(data = plt_hdis, aes(x = .6, y = factor(dm), label = ifelse(AboveZero>BelowZero, paste(round(AboveZero*100, digits = 1), "%>0", sep=""),paste(round(BelowZero*100, digits = 1), "%<0", sep="") )), vjust=.1, hjust=.5, size=ansize) +
+  theme_trout1 +
+  scale_y_discrete(labels = c("Replay -\n Manual", "Stock -\nManual", "Stock -\n Replay")) +
+  labs(y="Contrast", x = "TH Diff (s)") +
+  coord_cartesian(xlim = c(-.25, .7)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-0.2","0","0.2","0.4","0.6"))
+
+
+
+p_bayes <- plot_grid(p_postmeans, p_contrast, ncol = 1, labels = c("B","C"), label_size = 12)
+p_th_aggregate <- plot_grid(p_thpooled, p_bayes, ncol =2, labels = c("A",""), label_size = 12, rel_widths =  c(1.75,1))
+
+print(p_th_aggregate)
+
+ggsave("p_th_aggregate.eps", plot = p_th_aggregate, dev = cairo_ps, width = 15, height = 8, units = "cm", dpi = 300)
+
+
+
+```
+
+
+```{r, contrast from samples, fig.height = 5, fig.width=7}
+
+
+pars = c("b_automation","b_foreign")
+samples <- posterior_samples(mod, pars = pars)
+
+plt_hdis <- samples %>% 
+  gather(key = "b", value = "estimate") %>% 
+  group_by(b) %>% 
+  mean_hdi()
+  
+
+
+samples %>% 
+  p_direction()
+
+
+print(plt_hdis)
+p_contrast <- ggplot(plt_hdis) +
+  #geom_density_ridges(colour="grey40", fill = "white", scale=.96, rel_min_height=.005, size = 1.5)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = b, x = estimate, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1) +
+  #geom_text(data = plt_hdis, aes(x = .6, y = factor(dm), label = ifelse(AboveZero>BelowZero, paste(round(AboveZero*100, digits = 1), "%>0", sep=""),paste(round(BelowZero*100, digits = 1), "%<0", sep="") )), vjust=.1, hjust=.5, size=ansize) +
+  theme_trout1 +
+  scale_y_discrete(labels = c("Automation", "Foreign")) +
+  labs(y="Contrast", x = "TH Diff (s)") +
+  coord_cartesian(xlim = c(-.25, .7)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6"))
+
+
+
+p_bayes <- plot_grid(p_postmeans, p_contrast, ncol = 1, labels = c("B","C"), label_size = 12)
+p_th_aggregate <- plot_grid(p_thpooled, p_bayes, ncol =2, labels = c("A",""), label_size = 12, rel_widths =  c(1.75,1))
+
+print(p_th_aggregate)
+
+ggsave("p_th_aggregate.eps", plot = p_th_aggregate, dev = cairo_ps, width = 15, height = 8, units = "cm", dpi = 300)
+
+
+
+```

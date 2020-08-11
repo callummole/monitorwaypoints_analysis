@@ -1,0 +1,194 @@
+LAB BOOK
+
+29-10-18.
+
+#1. 12:00 - 13:30
+
+Good quality eye calibration. .17
+World scene on eyetrike kept freezing for a few seconds, but doesn't seem to lose any time, maybe just the rednering.
+Partiicpant is following instructions fine.
+Definite waypoint bhaviour throuhg slalom.
+
+
+#2. 13:30 - 15:00.
+
+Calibration average after two attempts (.55). Probably due to wearing contacts.
+Participant appeared to move head a lot. 
+Due to head movement the eyetracker was losing the surface a little bit on bends.
+But generally following instructions. 
+
+
+On the second block the participant was not steering between the targets for a few of the trials.
+But the calibration was excellent. 
+Looking beyond the horizon during straights in automation. May be worth including those above the horizon as 60m clip-offs.
+	
+#3 15:00 - 16:30
+
+For first block it was a good calibration.
+
+For second block the calibration struggled for targets on the left of the screen. 
+This is because eye1 lost focus towards the left. The rest of the time is great.
+
+30-10-2018
+
+#4 12:00 - 13:30.
+
+Struggled to calibrate aftere many attempts, despite apparently consistent eyetracking.
+Finally managed to get a calibration ~.68, which appeared OK on the mouse test, but I expect the data will be a little noisy.
+
+Had the same problems the next time around. Blinking during the gaze sampling stage seems to be a problem.
+
+#5 15.00-16.30
+
+Following instructions well. Had to adjust pupil intensity range to 30.
+But after that I had a good calibration. .36 something.
+Seems like adjusting intensity range is useful when wearing make-up.
+The eyetracking seems to be offset vertically & horizontally by a few degrees. The participant must have knocked the glasses.
+
+Same story in block 2: Excellent accuracy but the calibration seems offset. We should probably recalibrate this participant post-processing.
+
+31-10-2018
+#6 13:30 - 15:00.
+
+Non-native english speaker. Needed two practice sessions to become familiar with the concept of automation. Was trying to take control of the wheel during automation.
+In the end I achieved a reasonably good calibraiton. 
+
+For the first block he seemed to track fine. For the second the calibration was a little off, .5 degrees. Even after multipled attempts.
+
+Participant's eyelids were closing. I'm doubtful that eye-tracking for this second block was good quality.
+Participant was Chinese and the eyetracking struggled when he became fatigued.
+
+#7 15:00 - 16:30.
+
+Non-native english speaker. Gave two sessions of practice as was struggling with navigating the slaloms. 
+Moved head a lot during the actual driving.
+
+
+01-11-2018
+#8 10:00-11:30.
+
+- Had birth defect on left eye which resulted in a oval pupil that was slightly off-centre. 
+- Pupil-labs struggled to cope with this, so I tracked only with the right eye.
+- Calibration was pretty decent, .43. Participant understood instructions well.
+
+02-11-2018
+#9 8.30-10.00
+- Excellent calibration.Participant follows instructions well.
+- Excellent calibration for second block also.
+- This participant will be a good example to exhibit for supplementary materials.
+
+
+#10 10.00-11.30
+-Reasonable calibration, but was slightly off on the accuracy test.
+- maybe due to a slightly unfocussed eye image on eye0
+- Participant appeared nervous and was making a lot of saccades.
+- Same story for second block. Nice calibration but accuracy test seemed quite a way off.
+
+#11 12.00-13.30.
+- Had a reasonable calibration after I turned pupil intensity down to 15. (~.22).
+- Following instructions well.
+- Appeared that droopy eyes due to fatigur were obstructing the eye tracker a little. 
+- Eyetracking is pretty reliable in periods were eyes aren't droopy and the head isn't tilted back.
+- moved head quite a big because gradually would rest head/tilt back onto seat, then after a while would shift position. This probably caused calibration drift.
+- participant was very fidgety
+- kept the lights on, but dimmed, for second block to help the participant avoid getting too fatigued.
+
+#12 13.30-15.00
+- Good calibration & accuracy. Participant following instructions well, and has focussed gaze.
+- Again, good calibration on second block. Participant will be a good example.
+- Started getting fidgety and moving head a lot towards the end, so I'm not sure about the gaze data quality.
+
+#13 15:00 - 16:30.
+- Good calibration and participant following instructions well.
+- In block two there is also a good calibration.
+- LOOK AT EFFECTS OF FATIGUE ON FIXATIONS ELSEWHERE DURING AUTOMATION.
+- at the end of the study was moving heads a lot during automation and looking elsewhere.
+
+05/11/2018
+#14 12:00-1:30.
+- Had to ask participant to remove make-up, as it was interfering with eye-tracking.
+- Even after make-up removal the residual mascara would 'catch' the pupil, especially at eccentric angles.
+- Removing data below a confidence threshold should correct for this.
+- Participant also moved head a little during calibration and accuracy tests.
+- Otherwise, participant was good at following the steering instructions, and the eye-tracking looks ok for the majority.
+
+- Halfway through experiment block two the calibration seemed way off. Perhaps the participant had knocked the eyetracker...they certainly seemed to be moving their head a lot.
+- The head was moved in such a way that often the markers are not visible.
+- Also the participant made a large amount of erroneous trials. Some of these appear to be forgetting what the colours signified, or reducing effort at steering over the CENTRE of the targets (they were just happy with clipping the edges).
+
+#15 15:00-16:30
+- Good calibration first time. Participant has easy eyes to eye-track and follows instructions well.
+- Good example participant. Also had a first-time decent calibration on the second run.
+
+
+06/11/2018
+#16. 12:00 - 13:30.
+- Appeared to have excellent eyes to track, but struggled a little with tracking the eyes at eccentric angels. 
+- followed instructions well. 
+- Calibration much improved for the second block.
+
+#17 13:30-15:00.
+- After many calibration attempts I ahceived a good (~.27) calibration. The difficulty lay in participant not fixating the target or blinking.
+- Had to be reminded to keep within the road edges after the first four trials were erroneous. After the reminder the participant conducted the steering task well.
+- May be a good example participant.
+- Decent calibration for second block. But accuracy test was poor.
+- Calibration look way off towards the end of the second block. Perhaps the participant knocked the eye-tracker. Worth checking the data.
+
+#18 15:00-16:30.
+- showed definite tangent point fixation. Very clearly looked at the inside edge rather than the road.
+- Calibration for the second block seems inaccurate, but tracked the mouse well. Participant moved their head a lot during the accuracy test.
+- Calibration looked like it was offset vertically during the second block. Might need correcting.
+
+07/11/2018
+
+#19 12-13.30
+- Good calibration first time. Participant initially struggled with the tight-avoid manual trials 
+- In the second block the eye-tracker was distracted by the participant's mascara at the right eccentricities.
+- But there was good calibration in the central areas, which atre the important areas.
+
+#20.13.30-15:00.
+- Mascara was interfering with calibration. And there was a strange phenomenon whereby the calibration test was OK but the accuracy was way off on the highest row, with the gaze cursor showing way below the markers.
+- This happened twice. I re-started because I thought the participant might have knocked the glasses. 
+- Was moving head a lot to look at the waypoints.
+
+-Calibration was good for the second block after the participant had got up and moved around. The accuracy rest was also good.
+
+#21 15:00-16:30.
+- Decent calibration. Good eye image and high confidence with tracking the eyes throughout.
+- Excellent calibration on the second block.
+- Disapointingly, the gaze data didn't look great on a visual inspection. Perhaps the subject moved knocked the headset in some way. 
+- After observing the participant I noticed that the participant scrunched his eyes occasionally, presumably to combat fatigue.
+- Also the participant did not steer through the targets all the time, which is obvious to playback.
+
+08/11/2018
+#22 8.30-10:00.
+- Eye was being tracked well, but there was an intriguing 'blindspot'. Managed to fix it with adjusting the cameras, even though the previous image was good.
+- Participant followed instructions well. 
+- In the end, a decent calibration and accuracy test. The eye-tracking looks good whilst steering.
+- Good example participant.
+
+- OK claibration for second block. 
+
+#23 12-13.30
+- Good calibration after adjusting eye camera. Participant following instructions well.
+- Eyetracking looks good throughout the experiment. 
+- eyetracking recording paused at 18.02, for 10s. Check in data to see if it properly records in these instances.
+- Calibration and accuracy test are good for the second block.
+- On the second block, a pause in the recording at 2.43
+
+
+09/11/2018
+#24 12.00-13.30
+- Acceptable calibration. Participant is following instructions well. Eye-tracking is good quality without much amendments needed.
+- Good example participant for the difference gaze between attract and repel conditions.
+- Decent calibration for second block also.
+- Good eyetracking throughout.
+
+#25 15.00-16.30.
+- Easy eyes to eye-track. Participant is good at following instructions. 
+- Had to reboot pupil-labs a few times because eye1 was freezing or failing to initialise entirely. Not sure the cause, so may/may not affect the data.
+- Good example participant.
+- Participant shifted around at about 9 minutes , which seemed to upset the calibration.
+- There appears to be some heavy shearing, but only on the PC display. Didn't seem to translate to the projection display.
+
+

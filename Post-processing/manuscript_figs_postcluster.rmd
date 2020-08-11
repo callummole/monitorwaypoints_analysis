@@ -1,0 +1,815 @@
+---
+title: 'Bayes Inference of estimated Guiding Fixation Time Headway '
+author: "Callum Mole"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    fig_caption: yes
+  pdf_document:
+    fig_caption: yes
+  word_document:
+    fig_caption: yes
+---
+
+
+```{r, Load preliminaries, include=FALSE, warning=FALSE}
+
+library(readr)
+library(dplyr)
+library(tidyr)
+library(brms)
+library(tidybayes)
+library(ggplot2)
+library(BH)
+library(ggridges)
+library(feather)
+library(HDInterval)
+library(cowplot)
+library(bayestestR)
+
+
+#theme for plots on TRANSITION grant.
+
+#from matplotlib tab10 color cycle.
+#blue and red from matplotlib tab10 default color cycle.
+#red = #d62728
+#blue = #1f77b4
+
+red = "#d62728"
+blue = "#1f77b4"
+#orange = #ff7f0e
+#green = #2ca02c
+#purple = #9467bd
+#pink = #e377c2
+
+active_color = rgb(3, 238, 255, maxColorValue = 255)
+passive_color = '#ff7f0e' #rgb(255, 196, 3, maxColorValue = 255)
+stock_color = rgb(255, 3, 121, maxColorValue = 255)
+
+theme_trout1 <- theme_classic() +
+  theme(strip.background = element_rect(fill=NA,color=NA), 
+        text = element_text(family = "sans", size = 10),
+        axis.text = element_text(family = "sans", size = 8),
+        axis.title = element_text(family = "sans", size = 10),
+        legend.key = element_blank(),
+        panel.grid.major.y = element_line(color="grey85",size=.2, linetype = 2),
+       # panel.border = element_rect(colour = "black", fill=NA, size=.4),
+        legend.background = element_blank(),
+        panel.background = element_blank())
+       # axis.line = element_blank())
+
+text_multiplier <- ggplot2:::.pt
+ansize = 8/text_multiplier
+```
+
+
+
+```{r, Load data, echo=FALSE, message=FALSE, warning=FALSE}
+
+DATASET = 2 #change if you want different dataset
+COMPARE = FALSE #True if you want to compare norm to skew.
+
+#should change to open sci hosting
+setwd("C:/git_repos/Trout18_Analysis/Post-Processing/")
+clusters <- read_csv("../Processing/linmix_d1_7.csv") 
+
+
+
+d1 <- filter(clusters, dataset == DATASET)
+d1$drivingmode <- factor(d1$drivingmode)
+d1$ID <- factor(d1$ID)
+d1 <- mutate(d1, automation = ifelse(drivingmode %in% c(1,2), 1, 0),
+                           foreign = ifelse(drivingmode %in% c(0,1), 0, 1))
+d1$automation <- factor(d1$automation)
+d1$foreign <- factor(d1$foreign)
+
+```
+
+```{r, calc composed mean}
+
+
+d1 <- d1 %>% 
+  #filter(clust_n < 2) %>% 
+  group_by(ID, drivingmode) %>% 
+  mutate(wt_norm = weight / sum(weight),
+         clust_mn_wt = wt_norm * mean,
+         composed_mean = sum(clust_mn_wt))
+
+```
+
+
+
+```{r, specify model and plot priors}
+
+#m1_form = bf(mean ~ 1 + automation + foreign  + (1 + automation + foreign | ID))
+m1_form = bf(mean ~ 1 + drivingmode)
+#print(get_prior(m1_form, gf_data, family = skew_normal))
+myprior = c(set_prior("normal(0,1)", class = "b"),
+            set_prior("normal(2.5,2)", class = "Intercept"),
+            set_prior("cauchy(0,1)", class = "sigma"))
+
+
+```
+
+```{r, fit gf model}
+
+gf_data <- filter(d1, clust_n == 0)
+gf_means <- gf_data %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn = mean(mean))
+#model_name <- paste("gf.skew_",DATASET,".rda", sep="")
+#print(model_name)
+#if (!file.exists(model_name)) {
+gf.m1 <- brm(data = gf_data, formula = m1_form, 
+               family = gaussian(), prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))    
+
+summary(gf.m1)
+pp_check(gf.m1, nsamples = 100)
+
+
+```
+
+```{r, fit ef model}
+
+ef_data <- filter(d1, clust_n == 1)
+ef_means <- ef_data %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn = mean(mean))
+#model_name <- paste("ef.skew_",DATASET,".rda", sep="")
+#if (!file.exists(model_name)) {
+ef.m1 <- brm(data = ef_data, formula = m1_form, 
+               family = gaussian, prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99))  
+#save(ef.skew, file =model_name)
+#} else {load(model_name)}
+
+#if (COMPARE) {
+ # ef.gauss <- brm(data = ef_data, formula = m1_form, 
+#          family = gaussian(link = "identity"), prior = myprior, #inits = my_inits,
+#          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = #0.99))
+  
+#  print(loo(ef.gauss, ef.skew))
+#  print(loo_model_weights(ef.gauss,ef.skew))
+  
+#} 
+
+summary(ef.m1)
+pp_check(ef.m1, nsamples = 100)
+
+
+```
+
+```{r, plot population means on one axis}
+
+gf_preds <- gf_means %>% 
+  add_fitted_draws(gf.m1, re_formula = NA)
+
+gf_mns <- gf_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+ef_preds <- ef_means %>% 
+  add_fitted_draws(ef.m1, re_formula = NA)
+
+ef_mns <- ef_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+
+p_postmeans <- ggplot(gf_preds, aes(x = .value, group = factor(drivingmode), fill = factor(drivingmode))) +
+  stat_density(aes(y = ..density.., col = blue), geom = "density", alpha = .4, position = "identity", size = .5) +
+  stat_density(data = ef_preds, aes(y = ..density.., col = red), geom = "density", alpha = .4, position = "identity", size = .5) +
+  #coord_cartesian(xlim = c(1.75, 2.75)) +# , ylim = c(0, 1)) +
+  scale_colour_manual(values=c(blue,red),
+                     labels=c("GF", "EF"),
+                     name="") +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  
+  theme_trout1 +
+    theme(legend.position = c(.6,.8),
+           legend.key.size = unit(.5,"line"),
+          legend.direction = "horizontal",
+          legend.margin = unit(.2,"cm"))+
+  #geom_vline(data = empirical_means, aes(xintercept = mns, col = factor(drivingmode)), linetype = 2) +
+  xlab("Time Headway (s)") + ylab("Density") +
+  geom_hline(yintercept=0, colour="white", size=1) +
+  guides(fill = guide_legend(order=1, override.aes=list(col=NA)), col = guide_legend(order = 2))
+  
+print(p_postmeans)
+
+
+```
+```{r, cluster gaze mean contrasts}
+
+gf_ct <- gf_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+
+gf_hdi <- gf_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+gf_pdir <- gf_ct %>% 
+  p_direction()
+
+ef_ct <- ef_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2]) 
+
+ef_hdi <- ef_ct %>% 
+    gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+ef_pdir <- ef_ct %>%
+  p_direction()
+
+
+print(gf_hdi)
+print(gf_pdir)
+print(ef_hdi)
+print(ef_pdir)
+p_contrast <- ggplot(gf_hdi) +
+  #geom_density_ridges(colour="grey40", fill = "white", scale=.96, rel_min_height=.005, size = 1.5)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = as.numeric(factor(dm))+.1, x = ct, xmin = .lower, xmax = .upper, col = blue), fatten_point = 1, size = 1) +
+  geom_pointintervalh(data = ef_hdi, aes(y = as.numeric(factor(dm))-.1, x = ct, xmin = .lower, xmax = .upper, col = red), fatten_point = 1, size = 1) +
+  theme_trout1 +
+  scale_y_continuous(breaks = c(1,2,3), labels = c("Replay -\n Manual", "Stock -\nManual", "Stock -\n Replay")) +
+  labs(y="Contrast", x = "TH Diff (s)") +
+    scale_colour_manual(values=c(blue,red),
+                     labels=c("GF", "EF"),
+                     name="") +
+  coord_cartesian(xlim = c(-.25, .7), ylim=c(.5,3.5)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6")) +
+  theme(legend.position = c(.9,.8),
+         legend.key.size = unit(.5,"line")) 
+
+print(p_contrast)
+
+p_clustmeans_bayes <- plot_grid(p_postmeans, p_contrast, ncol = 2, labels = c("A","B"), label_size = 12, rel_widths = c(1.75,1))
+
+print(p_clustmeans_bayes)
+
+ggsave("p_clustmeans_bayes.eps", plot = p_clustmeans_bayes, dev = cairo_ps, width = 15, height = 5.5, units = "cm", dpi = 300)
+
+
+```
+
+
+
+```{r, fit cm model}
+
+#cm_form = bf(composed_mean ~ 1 + automation + foreign + (1 + automation + foreign | ID))
+cm_form = bf(composed_mean ~ 1 + drivingmode + (1 + drivingmode | ID))
+cm_data = filter(d1, clust_n == 0) #only need one composed mean estimate.
+model_name <- paste("cm.skew_",DATASET,".rda", sep="")
+if (!file.exists(model_name)) {
+cm.skew <- brm(data = cm_data, formula = cm_form, 
+               family = skew_normal, prior = myprior, #inits = my_inits,
+               iter = 20000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+save(cm.skew, file =model_name)
+} else {load(model_name)}
+
+if (COMPARE) {
+  cm.gauss <- brm(data = cm_data, formula = cm_form, 
+          family = gaussian(link = "identity"), prior = myprior, #inits = my_inits,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000, control = list(adapt_delta = 0.99))
+  
+  print(loo(cm.gauss, cm.skew))
+  print(loo_model_weights(cm.gauss,cm.skew))
+  
+} 
+
+summary(cm.skew)
+pp_check(cm.skew, nsamples = 100)
+
+
+```
+
+```{r, plot entropy}
+  
+ggplot(d1, aes(x = ID, y = entropy)) +
+  geom_point()
+
+```
+
+```{r, plot weights}
+
+d2 <- d1 %>% 
+  filter(clust_n != "2") %>% 
+  group_by(ID, drivingmode) %>% 
+  mutate(wt_norm = weight / sum(weight))
+
+noise_wts <- d1 %>% 
+  filter(clust_n == "2") %>% 
+  select(ID, drivingmode, weight)
+  
+
+d2$clust_n <- factor(d2$clust_n, levels = c("1", "2", "0"))
+
+summaries_full <- d1 %>% 
+  group_by(drivingmode, clust_n) %>% 
+  summarise(mn = mean(wt_norm),
+            stdev = sd(wt_norm))
+
+summaries_wt_norm <- d2 %>% 
+  group_by(drivingmode, clust_n) %>% 
+  summarise(mn = mean(wt_norm),
+            stdev = sd(wt_norm))
+
+
+summaries_wt_norm_toplot <- summaries_wt_norm %>% 
+  filter(clust_n != "2") %>% 
+  mutate(mn = ifelse(clust_n == "1", 1-mn, mn))
+
+
+drivingmode.names = c("Manual","Replay","Stock")
+names(drivingmode.names) = c("0","1","2")
+
+ggplot(d2, aes(x = ID, y=wt_norm, fill = clust_n)) +
+  facet_grid(.~drivingmode, labeller = labeller(drivingmode= drivingmode.names)) +
+  geom_col(alpha = .6) +
+  geom_hline(data=summaries_wt_norm_toplot, aes(yintercept = mn), color = "black", size = 1) +
+  scale_colour_manual(values=c("0" = blue, "1" = red, "2" = "grey60"),
+                     labels=c("0" ="GF", "1" = "EF","2" = "Noise"),
+                     name="") +
+  scale_fill_manual(values=c("0" = blue, "1" = red, "2" = "grey60"),
+                     labels=c("0" ="GF", "1" = "EF","2" = "Noise"),
+                     name="") +
+
+  theme_trout1 +
+  theme(panel.grid = element_blank(),
+        legend.key.size = unit(.75,"line")) +
+  scale_x_discrete(labels = function(x) {as.numeric(as.character(x)) - 500}) +
+  ylab("Gaze Probability")
+  
+  
+ggsave("p_weights.eps", plot = last_plot(), dev = cairo_ps, width = 13, height = 6, units = "cm", dpi = 300)
+```
+
+
+```{r, fit weight model}
+
+#cm_form = bf(composed_mean ~ 1 + automation + foreign + (1 + automation + foreign | ID))
+wt_form = bf(weight ~ 1 + drivingmode)# + (1 + drivingmode | ID))
+wt_data = filter(d1, clust_n==0)
+#plot dist of weights
+ggplot(wt_data, aes(x = wt_norm)) + geom_histogram() + facet_wrap(~drivingmode)
+print(get_prior(wt_form, wt_data, family = zero_one_inflated_beta())) #should plot priors.
+#model_name <- paste("wt.beta_",DATASET,".rda", sep="")
+wt.beta <- brm(data = wt_data, formula = wt_form, 
+               family = Beta(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(wt.beta)
+pp_check(wt.beta, nsamples = 100)
+wt.gauss <- brm(data = wt_data, formula = wt_form, 
+               family = gaussian(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(wt.gauss)
+pp_check(wt.gauss, nsamples = 100)
+
+
+
+```
+```{r, plot weight means and contrasts}
+
+
+wt_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(wt.gauss, re_formula = NA)
+
+wt_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+p_postweights <- ggplot(wt_preds, aes(x = .value, group = factor(drivingmode), fill = factor(drivingmode))) +
+  stat_density(data = wt_preds, aes(y = ..density..), col = blue, geom = "density", alpha = .4, position = "identity", size = .5) +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Replay", "2"="Stock"),
+                     name="") +
+  
+  theme_trout1 +
+    theme(legend.position = c(.9,.9),
+           legend.key.size = unit(.5,"line"),
+          legend.direction = "vertical" ) +
+  #coord_cartesian(xlim = c(.1, .4)) +
+  #geom_vline(data = empirical_means, aes(xintercept = mns, col = factor(drivingmode)), linetype = 2) +
+  xlab("Cluster Weight") + ylab("Density") +
+  geom_hline(yintercept=0, colour="white", size=1) 
+#  guides(col = FALSE)
+
+print(p_postweights)
+
+
+#contrast
+wt_ct <- wt_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+wt_pdir <- wt_ct %>% 
+  p_direction()
+
+print(wt_pdir)
+wt_hdi <- wt_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+
+print(wt_hdi)
+p_wt_contrast <- ggplot(wt_hdi) +
+  
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = dm, x = ct, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1) +
+  
+  theme_trout1 +
+  scale_y_discrete(labels = c("Passive -\n Active", "Stock -\nActive", "Stock -\n Passive")) +
+  labs(y="Contrast", x = "Wt Diff")
+  #coord_cartesian(xlim = c(-.25, .7)) +
+  #scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6"))
+
+print(p_wt_contrast)
+
+p_wt_bayes <- plot_grid(p_postweights, p_wt_contrast, ncol = 2, labels = c("A","B"), label_size = 12, rel_widths = c(1.75,1))
+
+print(p_wt_bayes)
+
+```
+
+
+```{r, plot population means}
+
+
+condition_list <- data.frame(drivingmode=c(0,1,2))
+
+Summaries <- list(fitted(gf.skew, newdata=condition_list, re_formula = NA, summary=TRUE),
+               fitted(ef.skew, newdata=condition_list, re_formula = NA, summary=TRUE),
+               fitted(cm.skew, newdata=condition_list, re_formula = NA, summary=TRUE))
+               
+
+for (s in Summaries){print(s)}
+
+print(mean(Summaries[1][[1]][,1]))
+print(mean(Summaries[2][[1]][,1]))
+wt_summary <- fitted(wt.beta, newdata = condition_list, re_formula = NA, summary = TRUE)
+print(wt_summary)
+#print(1 - mean(wt_summary[,1]))
+#print(1 - wt_summary[2,1])
+#print(1 - wt_summary[3,1])
+
+add_to_plot <- function(plot, mod, col_dots, col_line, size){
+  
+  mod <- as.data.frame(mod)
+  mod$drivingmode <- c(1,2,3)
+  p <- plot +
+    geom_line(data=mod, aes(x=drivingmode, y=Estimate), color = col_line, inherit.aes = FALSE) +
+    geom_point(data = mod, aes(x=drivingmode, y=Estimate, colour = factor(drivingmode)), size = size, colour = col_dots) +
+    geom_segment(data=mod, aes(y=Q2.5, x=drivingmode, yend=Q97.5, xend=drivingmode), size=1, color = col_dots) 
+    
+  return(p)
+}
+
+light_grey <- rgb(.8, .8, .8, maxColorValue = 1)
+active_color <- rgb(3, 238, 255, maxColorValue =  255)
+replay_color <- rgb(255, 196, 3, maxColorValue = 255)
+stock_color <- rgb(255, 3, 121, maxColorValue = 255)
+
+plot <- add_to_plot(ggplot(), Summaries[[1]], c("#0343df","#0343df","#0343df"), "#0343df", 1.5) %>% 
+  add_to_plot(Summaries[[2]], c("#e50000","#e50000","#e50000"), "#e50000", 1.5) %>% 
+  add_to_plot(Summaries[[3]], c(active_color,replay_color,stock_color), light_grey, 1.5)
+
+plot <- plot +
+  ylab("Time Headway(s)") + scale_y_continuous(limits = c(1, 4), breaks=0:4) +
+  xlab("Driving Mode") + scale_x_continuous(limits = c(.75,3.25), breaks=1:3, labels = c("Active","Replay","Stock")) +
+  theme_trout1
+
+print(plot)
+
+filename <- paste("overall_posterior_means_randomslopes_",DATASET,".png", sep="")
+ggsave(filename, plot = plot, device="png", width=8.9, height= 8.5, units = "cm", dpi=300, type="cairo")
+
+
+```
+
+
+
+```{r, plot fitted mean contrasts}
+
+
+
+
+estimate_contrast <- function(mod){
+  
+  condition_list <- data.frame(drivingmode=c(0,1,2))
+  df_fit <- fitted(mod, newdata=condition_list, re_formula = NA, summary=FALSE)
+  tdf_fit <- t(df_fit) #transpose
+  selection_cbind <- cbind(condition_list,tdf_fit) #add the condition values
+  estimates <- selection_cbind %>% gather(key = "Rep", value = "mn", -drivingmode) #y
+  
+  contrast_df <- estimates %>% 
+    group_by(Rep) %>% 
+    summarise(stockpas = mn[3] - mn[2],
+            stockact = mn[3] - mn[1],
+            pasact = mn[2] - mn[1]) %>% 
+    gather(key = "dm", value = "ct", -Rep)
+    
+  return(contrast_df)
+  
+}
+
+
+
+Models <- list(gf.skew, ef.skew, wt.beta)
+Contrasts <- lapply(Models, estimate_contrast)
+
+
+
+calc_hdis <- function(df){
+  
+  hdi <- df %>% 
+  group_by(dm) %>% 
+  summarise(HDI2.5 = hdi(ct, credMass = .95)[1],
+            HDI97.5 = hdi(ct, credMass = .95)[2],
+            mn = mean(ct),
+            AboveZero = mean(ct > 0),
+            BelowZero = mean(ct < 0),
+            hdi_95range = HDI97.5 - HDI2.5) %>% 
+    ungroup()
+  
+  return(hdi)
+
+}
+
+HDIs <- lapply(Contrasts, calc_hdis)
+for (h in HDIs){print(h)}
+
+contrast_plot <- function(df, hdis, col_line){
+  
+  plot <- ggplot(df, aes(x=ct, y=factor(dm))) + 
+  geom_density_ridges(colour=col_line, fill = "white", scale=.96, rel_min_height=.015)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_segment(data=hdis, aes(x=HDI2.5, y=as.numeric(factor(dm)), xend=HDI97.5, yend=as.numeric(factor(dm))), size=1) + 
+  geom_point(data=hdis, aes(x=mn, y=as.numeric(factor(dm))), size=2) +
+  geom_text(data = hdis, aes(x = mn, y = factor(dm), label = ifelse(AboveZero>BelowZero, paste(round(AboveZero*100, digits = 1), "%>0", sep=""),paste(BelowZero*100, "%<0", sep="") )), vjust=-2, hjust=.4, size=2) +
+  scale_y_discrete(labels = c("Replay - Active", "Stock - Active", "Stock - Replay")) +
+  labs(y="Driving Mode Contrast", x = "TH difference (s)") +
+  coord_cartesian(clip = "off", xlim = c(-.25, .7)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6")) +
+  theme_trout1
+  
+  return(plot)
+  
+}
+
+
+con_plots <- list(contrast_plot(Contrasts[[1]], HDIs[[1]],"#0343df"),
+                  contrast_plot(Contrasts[[2]], HDIs[[2]],"#e50000"),
+                  contrast_plot(Contrasts[[3]], HDIs[[3]],"#e50000"))
+
+
+#edits
+con_plots[[2]] <- con_plots[[2]] +
+  ylab("") + scale_y_discrete(labels = c("","",""))
+
+con_plots[[3]] <- con_plots[[3]] + 
+  ylab("") + scale_y_discrete(labels = c("","","")) +
+  coord_cartesian(clip = "off", xlim = c(-.075, .125)) +
+  scale_x_continuous(limits = c(-.1, .2), breaks = c(-.1,-.05,0,.05,.1,.15),labels=c("-.1","-.05","0",".05",".1",".15")) +
+  xlab("Weight difference (%)")
+
+print(con_plots[[1]])
+print(con_plots[[2]])
+print(con_plots[[3]])
+
+P <- plot_grid(plotlist = con_plots, labels = c("A","B","C"), rel_widths = c(1.5,1,1), nrow = 1)
+print(P)
+
+filename <- paste("contrasts_",DATASET,".png", sep="")
+ggsave(filename, plot = P, dev = "png", width=18, height= 8.5, units = "cm", dpi=300, type = "cairo")
+
+```
+
+```{r, model parameters}
+
+head(d1)
+
+#you also have the spreads. might want to incorporate these.
+d1 <- d1 %>% 
+  group_by(clust_n, drivingmode) %>% 
+  mutate(var = spread^2,
+         inv_var = 1/var,
+         inv_spr = 1/spread,
+         norm_inv_var = inv_var / sum(inv_var),
+        norm_inv_spr = inv_spr / sum(inv_spr))
+
+
+summaries <- d1 %>% 
+  filter(clust_n == 1) %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn = mean(intercept),
+            stdev = sd(intercept),
+            wt.mn = weighted.mean(intercept, inv_var),
+            wt.mn.sd = weighted.mean(intercept, inv_spr),
+            wt.stdev = sqrt(sum(norm_inv_var * (intercept - wt.mn)^2 )),
+            wt.stdev.sd = sqrt(sum(norm_inv_spr * (intercept - wt.mn)^2 )))
+
+ggplot(filter(d1, clust_n == 1), aes(y = intercept, x = drivingmode, group = drivingmode, fill = drivingmode, size = spread)) +
+  geom_point(alpha = .5) +
+  geom_pointrange(data = summaries, aes(y = mn, ymin = mn-stdev, ymax = mn+stdev, x = as.numeric(drivingmode)+.1), inherit.aes = F) +
+geom_pointrange(data = summaries, aes(y = wt.mn, ymin = wt.mn-wt.stdev, ymax =wt.mn+wt.stdev, x = as.numeric(drivingmode)+.2), inherit.aes = F, col = "blue") +
+geom_pointrange(data = summaries, aes(y = wt.mn.sd, ymin = wt.mn-wt.stdev.sd, ymax =wt.mn+wt.stdev.sd, x = as.numeric(drivingmode)+.3), inherit.aes = F, col = "red")
+
+
+```
+
+
+```{r, bayes ef intercept}
+
+intc_form = bf(intercept ~ 1 + drivingmode)# + (1 + drivingmode | ID))
+ef <- filter(d1, clust_n == 1)
+
+
+ef.gauss <- brm(data = ef, formula = intc_form, 
+               family = gaussian(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(ef.gauss)
+pp_check(ef.gauss)
+marginal_effects(ef.gauss)
+
+intc_wt_form = bf(intercept | weights(inv_var) ~ 1 + drivingmode)
+ef.wt_gauss <- brm(data = ef, formula = intc_wt_form, 
+               family = gaussian(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(ef.wt_gauss)
+pp_check(ef.wt_gauss, nsamples = 100)
+marginal_effects(ef.wt_gauss)
+
+loo(ef.gauss, ef.wt_gauss)
+loo_model_weights(ef.gauss,ef.wt_gauss)
+```
+
+```{r, contrasts for weighted ef}
+
+ef_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(ef.wt_gauss, re_formula = NA)
+
+ef_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+p_postef <- ggplot(ef_preds, aes(x = .value, group = factor(drivingmode), fill = factor(drivingmode))) +
+  stat_density(data = ef_preds, aes(y = ..density..), col = NA, geom = "density", alpha = .4, position = "identity", size = .5) +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  coord_cartesian(xlim = c(10,10.5)) +
+  theme_trout1 +
+    theme(legend.position = c(.9,.9),
+           legend.key.size = unit(.75,"line"),
+          legend.direction = "vertical" ) +
+  #coord_cartesian(xlim = c(.1, .4)) +
+  #geom_vline(data = empirical_means, aes(xintercept = mns, col = factor(drivingmode)), linetype = 2) +
+  xlab("Time along midline (s)") + ylab("Density") 
+#  geom_hline(yintercept=0, colour="white", size=1) 
+# 
+  
+#  guides(col = FALSE)
+
+print(p_postef)
+
+
+#contrast
+ef_ct <- ef_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+ef_pdir <- ef_ct %>% 
+  p_direction()
+
+print(ef_pdir)
+ef_hdi <- ef_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+
+print(ef_hdi)
+p_ef_contrast <- ggplot(ef_hdi) +
+  
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = dm, x = ct, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1) +
+  theme_trout1 +
+  scale_y_discrete(labels = c("Passive -\n Manual", "Stock -\nManual", "Stock -\n Passive")) +
+  labs(y="Contrast", x = "TH diff (s)") +
+  coord_cartesian(xlim = c(-.25, .25)) 
+  #scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6"))
+
+print(p_ef_contrast)
+
+p_ef_bayes <- plot_grid(p_postef, p_ef_contrast, ncol = 2, labels = c("B","C"), label_size = 12, rel_widths = c(1.5,1))
+
+print(p_ef_bayes)
+ggsave("p_ef_bayes.eps", plot = p_ef_bayes, dev = cairo_ps, width = 13, height = 5.5, units = "cm", dpi = 300)
+ggsave("p_ef_bayes.svg", plot = p_ef_bayes, width = 5.2, height = 2, units = "in", dpi = 300)
+
+```
+
+```{r, bayes gf intercept}
+
+intc_form = bf(intercept ~ 1 + drivingmode)# + (1 + drivingmode | ID))
+gf <- filter(d1, clust_n == 0)
+
+
+gf.gauss <- brm(data = gf, formula = intc_form, 
+               family = gaussian(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(gf.gauss)
+pp_check(gf.gauss)
+marginal_effects(gf.gauss)
+
+intc_wt_form = bf(intercept | weights(inv_var) ~ 1 + drivingmode)
+gf.wt_gauss <- brm(data = gf, formula = intc_wt_form, 
+               family = gaussian(), #prior = myprior, #inits = my_inits,
+               iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 2000, control = list(adapt_delta = 0.99)) 
+
+summary(gf.wt_gauss)
+pp_check(gf.wt_gauss, nsamples = 100)
+marginal_effects(gf.wt_gauss)
+
+loo(gf.gauss, gf.wt_gauss)
+loo_model_weights(gf.gauss,gf.wt_gauss)
+```
+
+```{r, contrasts for weighted gf}
+
+gf_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(gf.wt_gauss, re_formula = NA)
+
+gf_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+p_postgf <- ggplot(gf_preds, aes(x = .value, group = factor(drivingmode), fill = factor(drivingmode))) +
+  stat_density(data = gf_preds, aes(y = ..density..), col = blue, geom = "density", alpha = .4, position = "identity", size = .5) +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") 
+  
+#  guides(col = FALSE)
+
+print(p_postgf)
+
+
+#contrast
+gf_ct <- gf_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+gf_pdir <- gf_ct %>% 
+  p_direction()
+
+print(gf_pdir)
+gf_hdi <- gf_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+
+print(gf_hdi)
+p_gf_contrast <- ggplot(gf_hdi) +
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = dm, x = ct, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1) 
+  #coord_cartesi
+  
+  
+  #coord_cartesian(xlim = c(-.25, .7)) +
+  #scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6"))
+
+print(p_gf_contrast)
+
+#p_wt_bayes <- plot_grid(p_postweights, p_wt_contrast, ncol = 2, labels = c("A","B"), label_size = 12, rel_widths = c(1.75,1))
+
+#print(p_wt_bayes)
+
+```

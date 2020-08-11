@@ -1,0 +1,1532 @@
+---
+title: 'a look at segmentation'
+author: "Callum Mole"
+output:
+  html_document:
+    df_print: paged
+  html_notebook:
+    fig_caption: yes
+  pdf_document:
+    fig_caption: yes
+  word_document:
+    fig_caption: yes
+---
+
+## Introduction
+
+
+```{r, Load preliminaries, include=FALSE, warning=FALSE}
+
+library("tidyverse")
+library(magrittr) #for extra pipe functions
+library(cowplot)
+library(brms)
+library(tidybayes)
+library(ggridges)
+library(bayestestR)
+
+smooth_color = "black"
+saccade_color = "grey80"
+
+
+remove_facets <- theme(panel.border = element_blank(), 
+       panel.background = element_blank(), 
+       panel.grid = element_blank(),
+       strip.background = element_blank()) 
+
+
+red = "#d62728"
+blue = "#1f77b4"
+#orange = #ff7f0e
+#green = #2ca02c
+#purple = #9467bd
+#pink = #e377c2
+
+active_color = rgb(3, 238, 255, maxColorValue = 255)
+passive_color = '#ff7f0e' #rgb(255, 196, 3, maxColorValue = 255)
+stock_color = rgb(255, 3, 121, maxColorValue = 255)
+
+theme_trout1 <- theme_classic() +
+  theme(strip.background = element_rect(fill=NA,color=NA), 
+        text = element_text(family = "sans", size = 10),
+        axis.text = element_text(family = "sans", size = 8),
+        axis.title = element_text(family = "sans", size = 10),
+        legend.key = element_blank(),
+        panel.grid.major.y = element_line(color="grey85",size=.2, linetype = 2),
+       # panel.border = element_rect(colour = "black", fill=NA, size=.4),
+        legend.background = element_blank(),
+        panel.background = element_blank())
+       # axis.line = element_blank())
+
+text_multiplier <- ggplot2:::.pt
+ansize = 8/text_multiplier
+```
+
+
+```{r, Load data, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Loading the plot-ready RDS files is a hell of a lot faster than processing the files upon each report generation.
+
+#rds files held on the OSF. https://osf.io/f2n4c/
+
+#set working directory to folder that hosts the binary files.
+setwd("C:/git_repos/Trout18_Analysis/Post-processing")
+
+#todo: add cumdist so that plots can be in the same time scale as the fitted plots.
+segment_data_raw <- read_csv("../Data/segmentation_scaled_rerun_2020-02-2020.csv")
+#segment_data_raw <- filter(segment_data_raw, roadsection == 1, drivingmode < 3, T0_2 == 0, on_srf_2 == 1, on_srf_1 == 1)
+segment_data_raw <- filter(segment_data_raw, roadsection < 2, drivingmode < 3, T0_2 == 0, on_srf_2 == 1, on_srf_1 == 1)
+#segment_data_raw <- filter(segment_data_raw, roadsection == 1, drivingmode < 3, on_srf_2 == 1, on_srf_1 == 1)
+
+#scale factor of three is too large for the slalom dataset.
+segment_data <- segment_data_raw
+segment_data <- segment_data %>% 
+  mutate(match = paste(ID, block, condition, count, sep = "_"),
+         seg_class = ifelse(seg_class == 4, 1, seg_class))
+
+
+
+
+#remove unmatched manual trials
+matchlist <- segment_data %>% 
+  filter(drivingmode == 1) %>% 
+  select(match) %>% 
+  unique()
+
+segment_data <- filter(segment_data, (drivingmode == 2) | match %in% matchlist$match)
+
+segment_data <- segment_data %>% 
+  group_by(trialcode) %>% 
+  mutate(t1_zero= t1 - t1[1], t2_zero= t2 - t1[1]) 
+
+
+#Before plotting, create labels to names mappings for labelling facets
+drivingmode.names = c("Manual","Replay","Stock")
+names(drivingmode.names) = c("0","1","2")
+
+ID.names = c("1","2","3","4","5","6","7","8","9","10","11")
+names(ID.names) = c(501,502,503,504,505,506,507,508,509,510,511)
+
+#recreate labeller
+roadsection.names = c("Straight","Bends","Slalom")
+names(roadsection.names) = c("0","1","2")
+
+
+```
+
+
+```{r, segment processing}
+
+
+segment_data <- segment_data %>% 
+  group_by(seg_i) %>% 
+  mutate(v_vel = (v2 - v1 / abs(t2 - t1)),
+         h_vel = (h2 - h1 / abs(t2 - t1)),
+         yawrate = -yawrate, ##the vizmat.anglediff gives the sign in the opposite way that you would expect
+         half_yr = yawrate/2,
+         h_OKN = h_vel - half_yr,
+         th_diff = th_2 - th_1,
+         forwards = ifelse(th_diff > 0, 1, 0))
+
+segment_data <- segment_data %>% 
+  mutate(ID = ifelse(ID == 203, 503, ID))
+
+continued_classes <- function(diff_seg_class, seg_class){
+  idx_changes <- which(diff_seg_class != 0) #the indexes at which the segment changes
+
+  seg_i = 1
+  seg_i_list = vector()
+  for (i in 1:(length(idx_changes))){
+    
+    if (i == length(idx_changes)){
+      nreps = length(seg_class)+1 - idx_changes[i]
+      
+    }else{
+      nreps = idx_changes[i+1] - idx_changes[i]  
+    }
+    
+    new_segment = rep_len(seg_i, length.out = nreps)
+    seg_i_list = c(seg_i_list, new_segment)
+    seg_i = seg_i + 1
+  }
+  
+  return(seg_i_list)
+  
+}
+
+
+
+segment_data <- segment_data %>% 
+  ungroup() %>% 
+  mutate(diff_seg_class = c(1,diff(seg_class)))
+
+segment_data <- segment_data %>% 
+  mutate(seg_concat = continued_classes(diff_seg_class, seg_class))
+
+seg_concat_data <- segment_data %>% 
+  group_by(seg_concat) %>% 
+  arrange(seg_i) %>% 
+  summarise(trialcode = first(trialcode),
+            condition = first(condition),
+            count = first(count),
+            drivingmode = first(drivingmode),
+            roadsection = first(roadsection),
+            yawrate = mean(yawrate),
+            match = first(match),
+            ID = first(ID),
+            t1 = first(t1),
+            t2 = last(t2),
+            v1 = first(v1),
+            v2 = last(v2),
+            h1 = first(h1),
+            h2 = last(h2),
+            t1_zero = first(t1_zero),
+            t2_zero = last(t2_zero),
+            th_1 = first(th_1),
+            th_2 = last(th_2),
+            seg_class = first(seg_class))
+
+seg_concat_data <- seg_concat_data %>% 
+  mutate(duration = t2 - t1)
+         
+seg_concat_data <- rename(seg_concat_data, seg_i = seg_concat)
+
+seg_concat_data <- seg_concat_data %>% 
+  group_by(seg_i) %>% 
+  mutate(v_vel = (v2 - v1) / duration,
+         h_vel =  (h2 - h1) / duration,
+         half_yr = yawrate/2,
+         h_OKN = h_vel - half_yr,
+         th_diff = th_2 - th_1,
+         forwards = ifelse(th_diff > 0, 1, 0))
+
+
+
+
+
+segstart <- segment_data %>% select(-t2, -t2_zero, -v2, -h2, -th_2) %>% rename(t = t1_zero, v = v1, h= h1, th = th_1)
+segend<- segment_data %>% select(-t1, -t1_zero, -v1, -h1, -th_1) %>% rename(t = t2_zero, v = v2, h= h2, th = th_2)
+segdata_long <- bind_rows(segstart, segend)
+
+segstart <- seg_concat_data %>% select(-t2, -t2_zero, -v2, -h2, -th_2) %>% rename(t = t1_zero, v = v1, h= h1, th = th_1)
+segend<- seg_concat_data %>% select(-t1, -t1_zero, -v1, -h1, -th_1) %>% rename(t = t2_zero, v = v2, h= h2, th = th_2)
+segdata_long_concat <- bind_rows(segstart, segend)
+
+
+#head(segdata_long)
+#head(segment_data)
+
+```
+
+
+
+
+
+
+```{r plot matched trials and stock segmented, fig.width=10,fig.height=4}
+
+return_trialcodes <- function(data, npp){
+  
+  trials = c()
+  pps <- sample(unique(data$ID),npp)
+  #print(pps)
+  
+  for (p in pps){
+    stock <- data %>% 
+      filter(drivingmode == 2, ID == p) %>% 
+      select(trialcode) %>% 
+      unique() %>% 
+      sample_n(1)
+    trials = c(trials, stock$trialcode) 
+   # print('stock')
+  #  print(stock$trialcode)
+    
+    matched <- data %>% 
+      filter(drivingmode == 1, ID == p) %>% 
+      select(match) %>% 
+      unique() %>% 
+      sample_n(1)
+    #print(matched)
+    
+    matchcodes <- data %>% 
+      filter(match == matched$match, ID == p, drivingmode %in% c(0,1)) %>% 
+      select(trialcode) %>% 
+      unique()
+    
+   # print('matched')
+  #  print(matchcodes$trialcode)
+    
+    trials = c(trials, matchcodes$trialcode)
+    
+  }
+  return(trials)
+}
+
+segdata_long %>% 
+  filter(drivingmode == 2, ID == 502) %>% 
+  select(trialcode) %>% 
+  unique() %>% 
+  sample_n(1)
+  
+sample(unique(segdata_long$ID),1)
+
+trials = return_trialcodes(segdata_long, 3)
+
+trial_traces <- filter(segdata_long, trialcode %in% trials)
+
+
+ggplot(trial_traces, aes(x=t, y=th, colour=factor(seg_class), group=seg_i)) + geom_line(size=1) +
+  coord_cartesian(ylim = c(1, 3.25), xlim = c(5,11))  +
+  ylab("Time Headway (s)")  + xlab("Time into Trial (s)") +
+  scale_color_manual(values=c(smooth_color,saccade_color),
+                     labels=c("Pursuits","Saccades"),
+                     name="") +
+  theme_trout1 +
+  facet_grid(ID~drivingmode, labeller = labeller(drivingmode = drivingmode.names, ID = ID.names)) +
+  theme(legend.position = c(.3,.65),
+        legend.key.size = unit(.5,"line"),
+        panel.spacing.x = unit(1,"cm")) +
+  remove_facets +
+  scale_y_continuous(breaks = c(1,2,3))
+
+
+#ggsave('traces_sawtooth.png', plot = last_plot(), width=18, height=15, units = "cm", dpi=300, type = "cairo")
+
+#ggsave('sample_sawtooth_hfes.svg', plot = last_plot(), width=21, height=10, units = "cm", dpi=800)
+
+ggsave("traces_sawtooth.eps", plot = last_plot(), dev = cairo_ps, width = 15, height = 7, units = "cm", dpi = 300)
+
+
+```
+
+
+```{r, get launch and landing saccades}
+
+
+bends_data <- seg_concat_data %>% 
+  filter(seg_class == 2, forwards == 1) %>% 
+  filter(roadsection == 1) #only for bends?
+
+pp_meds <- bends_data %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med_launch = median(th_1),
+            med_land = median(th_2)) 
+
+#land_agg <- bends_data %>% 
+#  ungroup() %>% 
+#  group_by(ID, drivingmode) %>% 
+#  summarise(med_launch = median(th_1),
+#            mean_launch = mean(th_1)) 
+
+#ggplot(data = bends_data, aes(y = ID, x = th_1)) + 
+#  geom_point(alpha =.05) +
+#  geom_point(data = land_agg, aes(y = ID, x = med_launch), size = 2, col = "green") +
+#  geom_point(data = land_agg, aes(y = ID, x = mean_launch), size = 2, col = "red") +
+#  facet_wrap(~drivingmode)
+
+bends_data <- bends_data %>% 
+  mutate(dm_names = case_when(drivingmode == 0 ~ 'Active',
+                              drivingmode == 1 ~ 'Passive-Replay',
+                              drivingmode == 2 ~ 'Passive-Stock'))
+bends_data$dm_names <- as.factor(bends_data$dm_names)
+p_saccades <- ggplot(bends_data, aes(x = th_1)) + 
+  stat_density(geom="line", col = "black") +
+  stat_density(geom="line", aes(x = th_2), col = "grey60") +
+  facet_grid(.~drivingmode, labeller = labeller(drivingmode = drivingmode.names)) + 
+  coord_cartesian(xlim = c(0, 4), ylim = c(-.4, 1.25)) +
+  geom_hline(aes(yintercept = 0), linetype = 2, col = "black") +
+  scale_y_continuous(breaks = c(-.325, -.125, 0,.25,.5,.75,1,1.25), labels = c("Post. Means","Indv. Medians","0",".25",".5",".75","1","1.25")) +
+  theme_classic() +
+  xlab("Time Headway (s)") + ylab("Density") +
+  remove_facets +
+  theme_trout1 +
+  geom_point(data = pp_meds, aes(x = med_launch, y = -.1), col = "black", alpha = .5, size = 1 ) +
+  geom_point(data = pp_meds, aes(x = med_land, y = -.15), col = "grey60", alpha = .5, size = 1) +
+  theme(panel.grid.major.y = element_blank(),
+        axis.title.y = element_text(hjust = .7, margin = margin(r = -15)))
+  #geom_text(aes(label = dm_names), x = 2, y = 1.5, size = ansize)
+  
+
+print(p_saccades)
+ggsave('pooled_launch_land.png', plot = p_saccades, width=15, height=8, units = "cm", dpi=300, type = "cairo")
+
+```
+
+```{r, other figs}
+
+ggplot(bends_data, aes(x = th_1, group= drivingmode, y=..density.., fill = factor(drivingmode))) + geom_histogram(alpha = .3, position = "identity") + 
+  #geom_density(aes(x = th_2), col = "red") +
+  #facet_grid(.~drivingmode, labeller = labeller(drivingmode = drivingmode.names)) + 
+  xlab("Saccade Launching point (s)")
+
+ggplot(bends_data, aes(x = th_2, group= drivingmode, y=..density.., fill = factor(drivingmode))) + geom_histogram(alpha = .3, position = "identity") + 
+  #geom_density(aes(x = th_2), col = "red") +
+  #facet_grid(.~drivingmode, labeller = labeller(drivingmode = drivingmode.names)) + 
+  xlim(0,7)+
+  xlab("Saccade Landing point (s)")
+
+
+#launch
+launch_pp <- bends_data %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode, trialcode) %>% 
+  summarise(med_launch = median(th_1)) %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(launch = mean(med_launch))
+
+launch_overall <- launch_pp %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_launch = mean(launch),
+            error =  qt(0.975,df=n()-1)*sd(launch)/sqrt(n()),
+            ci.l = mn_launch - error,
+            ci.u = mn_launch + error)
+
+ggplot(launch_overall, aes(x = drivingmode, y = mn_launch)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+  
+
+
+
+#launch
+land_pp <- bends_data %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode, trialcode) %>% 
+  summarise(med_land = median(th_2)) %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(land = mean(med_land))
+
+land_overall <- land_pp %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_land = mean(land),
+            error =  qt(0.975,df=n()-1)*sd(land)/sqrt(n()),
+            ci.l = mn_land - error,
+            ci.u = mn_land + error)
+
+ggplot(land_overall, aes(x = drivingmode, y = mn_land)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+  
+
+```
+
+```{r, bayes model of launch}
+
+pp_launch <- bends_data %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med = median(th_1)) 
+
+pp_launch$drivingmode <- as.factor(pp_launch$drivingmode)
+
+pp_launch_summaries <- pp_launch %>% 
+  group_by(drivingmode) %>% 
+  summarise(mint = min(med),
+            maxt = max(med))
+
+ggplot(pp_launch, aes(x = med)) +
+  geom_histogram(aes(y = ..density..)) +
+  facet_wrap(~drivingmode)
+
+#ggplot(pp_meds, aes(x = med_launch)) +
+#  geom_histogram()
+
+#pp_meds$drivingmode <- as.factor(pp_meds$drivingmode)
+
+bf1 <- bf(med ~ 1 + drivingmode)
+myprior_fix = c(set_prior("normal(2.5,2)", class = "Intercept"),
+            set_prior("normal(0,1)", class="b"),
+            set_prior("cauchy(0,1)", class="sigma"))
+m.launch.g <- brm(data = pp_launch, formula = bf1,
+          family = gaussian(), prior = myprior_fix,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000)
+
+summary(m.launch.g)
+pp_check(m.launch.g, nsamples = 100)
+
+
+```
+
+```{r, bayes model of land}
+
+
+pp_land <- bends_data %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med = median(th_2)) 
+
+pp_land$drivingmode <- as.factor(pp_land$drivingmode)
+
+
+pp_land_summaries <- pp_land %>% 
+  group_by(drivingmode) %>% 
+  summarise(mint = min(med),
+            maxt = max(med))
+
+ggplot(pp_land, aes(x = med)) +
+  geom_histogram(aes(y = ..density..)) +
+  facet_wrap(~drivingmode)
+
+#ggplot(pp_meds, aes(x = med_launch)) +
+#  geom_histogram()
+
+#pp_meds$drivingmode <- as.factor(pp_meds$drivingmode)
+
+bf1 <- bf(med ~ 1 + drivingmode)
+myprior_fix = c(set_prior("normal(2.5,2)", class = "Intercept"),
+            set_prior("normal(0,1)", class="b"),
+            set_prior("cauchy(0,1)", class="sigma"))
+m.land.g <- brm(data = pp_land, formula = bf1,
+          family = gaussian(), prior = myprior_fix,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000)
+
+summary(m.land.g)
+pp_check(m.land.g, nsamples = 100)
+
+
+```
+
+
+
+
+```{r, mean estimates}
+
+launch_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(m.launch.g)
+
+land_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(m.land.g)
+
+
+launch_hdi <- launch_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+land_hdi <- land_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+p_saccade_bayes <- p_saccades +
+  geom_pointintervalh(data = launch_hdi, aes(y = -.3, x = .value, xmin = .lower, xmax = .upper), col = "black", fatten_point = 1, size = 1) +
+    geom_pointintervalh(data = land_hdi, aes(y = -.35, x = .value, xmin = .lower, xmax = .upper), col = "grey60", fatten_point = 1, size = 1) 
+
+print(p_saccade_bayes)
+
+ggsave("p_saccade_bayes.eps", plot = p_saccade_bayes, dev = cairo_ps, width = 15, height = 6, units = "cm", dpi = 300)
+
+```
+
+```{r, add contrasts}
+
+launch_ct <- launch_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+
+launch_hdi <- launch_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+launch_pdir <- launch_ct %>% 
+  p_direction()
+
+land_ct <- land_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2]) 
+
+land_hdi <- land_ct %>% 
+    gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+land_pdir <- land_ct %>%
+  p_direction()
+
+
+print(launch_hdi)
+print(launch_pdir)
+print(land_hdi)
+print(land_pdir)
+p_contrast <- ggplot(launch_hdi) +
+  #geom_density_ridges(colour="grey40", fill = "white", scale=.96, rel_min_height=.005, size = 1.5)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = as.numeric(factor(dm))+.1, x = ct, xmin = .lower, xmax = .upper, col = "black"), fatten_point = 1, size = 1) +
+  geom_pointintervalh(data = land_hdi, aes(y = as.numeric(factor(dm))-.1, x = ct, xmin = .lower, xmax = .upper, col = "grey60"), fatten_point = 1, size = 1) +
+  theme_trout1 +
+  scale_y_continuous(breaks = c(1,2,3), labels = c("Replay -\n Manaul", "Stock -\nManual", "Stock -\n Replay")) +
+  labs(y="", x = "TH Diff (s)") +
+    scale_colour_manual(values=c("black","grey60"),
+                     labels=c("Launch", "Land"),
+                     name="") +
+  coord_cartesian(xlim = c(-.25, .7), ylim=c(.5,3.5)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6")) +
+  theme(legend.position = c(.8,.78),
+         legend.key.size = unit(.5,"line")) 
+
+print(p_contrast)
+
+p_saccade_bayes_contrast <- plot_grid(p_saccade_bayes, p_contrast, ncol = 2, labels = c("A","B"), label_size = 12, rel_widths = c(1.8,1))
+
+print(p_saccade_bayes_contrast)
+
+ggsave("p_saccade_bayes_contrast.eps", plot = p_saccade_bayes_contrast, dev = cairo_ps, width = 15, height = 6, units = "cm", dpi = 300)
+
+
+```
+
+
+```{r, bayes model of pursuit duration}
+
+pursuits_bends <- seg_concat_data %>% 
+  filter(seg_class %in% c(1,4), forwards == 0, roadsection == 1) %>%  #smooth pursuits and fixations, bends, landing within 5 degrees of the future path, only the pursuits coming towards you
+  mutate(duration = abs(t2 - t1),
+         th_diff = th_1 - th_2)
+
+purs_meds <- pursuits_bends %>% 
+  filter(duration < 1) %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med = median(duration))
+
+purs_meds$drivingmode <- as.factor(purs_meds$drivingmode)
+
+ggplot(purs_meds, aes(x = med)) +
+  geom_histogram(aes(y = ..density..)) +
+  facet_wrap(~drivingmode)
+
+bf1 <- bf(med ~ 1 + drivingmode)
+#myprior_fix = c(set_prior("normal(2.5,2)", class = "Intercept"),
+ #           set_prior("normal(0,1)", class="b"),
+#            set_prior("cauchy(0,1)", class="sigma"))
+
+print(get_prior(bf1, data =purs_meds, family=lognormal))
+
+m.purs <- brm(data = purs_meds, formula = bf1,
+          family = gaussian(),
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000)
+
+summary(m.purs)
+pp_check(m.purs, nsamples = 100)
+
+m.purs.ln <- brm(data = purs_meds, formula = bf1,
+          family = lognormal(),
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000)
+
+summary(m.purs.ln)
+pp_check(m.purs.ln, nsamples = 100)
+
+loo_model_weights(m.purs,m.purs.ln)
+
+
+print(get_prior(bf1, data =purs_meds, family=lognormal))
+myprior_fix = c(set_prior("normal(0,1)", class = "Intercept"),
+            set_prior("normal(0,1)", class="b"),
+            set_prior("cauchy(0,1)", class="sigma"))
+
+m.purs.ln <- brm(data = purs_meds, formula = bf1,
+          family = lognormal(), prior = myprior_fix,
+          iter = 5000, cores = 4, refresh = 500, chains = 4, warmup = 1000)
+summary(m.purs.ln)
+
+```
+
+```{r, purs descriptives}
+
+purs_preds <- data.frame(drivingmode = c(0,1,2)) %>% 
+  add_fitted_draws(m.purs.ln)
+
+purs_mns <- purs_preds %>% 
+  group_by(drivingmode) %>% 
+  mean_hdi()
+
+#manuscript figure.
+p_descriptive <- ggplot(filter(pursuits_bends, duration > 0, duration < 1), aes(x = duration, group = factor(drivingmode), col = factor(drivingmode))) + 
+  stat_density(geom="line", position = "identity") +
+  coord_cartesian(xlim = c(0, 1), ylim = c(-2.5, 3.5)) +
+  xlab("Pursuit Duration (s)") +
+  geom_hline(aes(yintercept = 0), linetype = 2, col = "black") +
+  scale_y_continuous(breaks = c(-2, -1, 0,1,2,3), labels = c("Post. Means","Indv. Medians","0","1","2","3")) +
+  remove_facets +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Manual", "1"="Replay", "2"="Stock"),
+                     name="") +
+  theme_trout1 +
+  theme(legend.position = c(.8,.75),
+        axis.title.y = element_text(hjust = .7, margin = margin(r = -15)),
+        legend.key.size = unit(.5,"line")) +
+  geom_point(data = purs_meds, aes(x = med, y = as.numeric(drivingmode)*-.2 - .6, col = factor(drivingmode)), alpha = .5, size = 1)  + #faffy as drivngmode has different values in these dataframes depending on whether it's a factor
+  geom_pointintervalh(data = purs_mns, aes(y = as.numeric(drivingmode)*-.2 - 1.8, x = .value, xmin = .lower, xmax = .upper, col = factor(drivingmode)), fatten_point = 1, size = 1) +
+  ylab("Density")
+  
+  
+print(p_descriptive)
+
+purs_ct <- purs_preds %>% 
+  group_by(.draw) %>% 
+  summarise(pasact = .value[2] - .value[1],
+            stockact = .value[3] - .value[1],
+            stockpas = .value[3] - .value[2])
+
+
+purs_hdi <- purs_ct %>% 
+  gather(key = "dm", value = "ct", -.draw) %>% 
+  group_by(dm) %>% 
+  mean_hdi()
+
+purs_pdir <- purs_ct %>% 
+  p_direction()
+
+print(purs_mns)
+print(purs_hdi)
+print(purs_pdir)
+
+#add pursuit contrast to fig
+p_purs_contrast <- ggplot(purs_hdi) +
+  #geom_density_ridges(colour="grey40", fill = "white", scale=.96, rel_min_height=.005, size = 1.5)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_pointintervalh(aes(y = factor(dm), x = ct, xmin = .lower, xmax = .upper), fatten_point = 1, size = 1, col = "black") +
+  theme_trout1 +
+  scale_y_discrete(labels = c("Replay -\n Manual", "Stock -\nManual", "Stock -\nReplay")) +
+  labs(y="", x = "Duration Diff (s)") +
+  coord_cartesian(xlim = c(-.15, .15), ) +
+  #scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6")) +
+  theme(legend.position = c(.8,.78),
+         legend.key.size = unit(.5,"line")) 
+
+print(p_purs_contrast)
+#do pursuit contrast
+
+p_purs_bayes_contrast <- plot_grid(p_descriptive, p_purs_contrast, ncol = 2, labels = c("A","B"), label_size = 12, rel_widths = c(1.8,1))
+
+print(p_purs_bayes_contrast)
+
+ggsave("p_purs_bayes_contrast.eps", plot = p_purs_bayes_contrast, dev = cairo_ps, width = 15, height = 6, units = "cm", dpi = 300)
+
+```
+
+```{r, bayes model of land2}
+
+
+ggplot(pp_meds, aes(x = med_land)) +
+  geom_histogram(aes(y = ..density..))
+
+bf2 <- bf(th_2 ~ 1 + drivingmode + (1+drivingmode | ID))
+m.land.g <- brm(data = land_fit, formula = bf2,
+          family = gaussian(),
+          iter = 10000, cores = 4, refresh = 500, chains = 1, warmup = 1000)
+
+summary(m.land.g)
+pp_check(m.land.g)
+
+m.land.t <- brm(data = land_fit, formula = bf2,
+          family = student(),
+          iter = 10000, cores = 4, refresh = 500, chains = 1, warmup = 1000)
+
+summary(m.land.t)
+pp_check(m.land.t)
+
+loo(m.land.g, m.land.t)
+loo_model_weights(m.land.g, m.land.t)
+
+save(m.land.t, file ='m.land.t.rda')
+
+#student t is better.
+
+#for inferences.
+drivingmode <- c("0","1","2")
+#ppid <- c(501:511)
+#pred_list <- expand_grid(drivingmode, ppid)
+dm <- as.data.frame(drivingmode)
+condition_means <- fitted(m.land.t, newdata = dm, re_formula = NA, summary = TRUE) %>% 
+  cbind(dm, .)
+  
+ggplot(condition_means, aes(x = drivingmode, y = Estimate))+
+  geom_pointrange(aes(ymin = Q2.5, ymax = Q97.5))
+
+#contrasts.
+draws <- dm %>% 
+  add_fitted_draws(m.land.t, re_formula = NA, summary = FALSE)
+
+contrast_df <- draws %>% 
+    group_by(.draw) %>% 
+    summarise(stockpas = .value[3] - .value[2],
+            stockact = .value[3] - .value[1],
+            pasact = .value[2] - .value[1]) %>% 
+    gather(key = "dm", value = "ct", -.draw)
+
+contrast_df %>% 
+  group_by(dm) %>% 
+  mean_hdi(ct)
+
+
+
+hdis <- calc_hdis(contrast_df)
+
+col_line = "grey60"
+landp <- ggplot(contrast_df, aes(x=ct, y=factor(dm))) + 
+  geom_density_ridges(colour=col_line, fill = "white", scale=.55, rel_min_height=.015, size = 1)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_segment(data=hdis, aes(x=HDI2.5, y=as.numeric(factor(dm)), xend=HDI97.5, yend=as.numeric(factor(dm))), size=1) + 
+  geom_point(data=hdis, aes(x=mn, y=as.numeric(factor(dm))), size=2) +
+  geom_text(data = hdis, aes(x = mn, y = factor(dm), label = ifelse(AboveZero>BelowZero, paste(round(AboveZero*100, digits = 1), "%>0", sep=""),paste(BelowZero*100, "%<0", sep="") )), vjust=-2, hjust=.4, size=2) +
+  scale_y_discrete(labels = c("", "", "")) +
+  labs(y="", x = "Saccade land difference (s)") +
+  theme_classic()+
+  coord_cartesian(clip = "off", xlim = c(-.25, .7)) +
+  scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6")) +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=.4),
+       legend.background = element_blank(),
+       panel.background = element_blank(),
+       axis.line = element_blank()) 
+  #coord_cartesian(clip = "off", xlim = c(-.25, .7)) +
+  #scale_x_continuous(breaks = c(-.2,0,.2,.4,.6),labels=c("-.2","0",".2",".4",".6"))
+print(landp)
+
+myplot <- plot_grid(launchp, landp, labels = c("A","B"), label_x = .1, label_y = .97)
+print(myplot)
+
+ggsave('land_contrasts.png', plot = last_plot(), width=18, height=10, units = "cm", dpi=300, type = "cairo")
+```
+
+
+```{r correlating smooth pursuit duration}
+
+#ggsave('pursuit_bends_hfes.png', plot = last_plot(), width=20, height=15, units = "cm", dpi=300, type = "cairo")
+
+pursuits_bends <- seg_concat_data %>% 
+  filter(seg_class %in% c(1,4), forwards == 0) %>%  #smooth pursuits and fixations, bends, landing within 5 degrees of the future path, only the pursuits coming towards you
+  mutate(ang_dist = sqrt( (h1 - h2)^2 + (v1 - v2)^2),
+         duration = abs(t2 - t1),
+         th_diff = th_1 - th_2)
+
+ggplot(pursuits_bends, aes(x = duration, y = th_diff, col = factor(drivingmode))) +
+  geom_point(alpha = .1) +
+  facet_wrap(~ID) +
+  coord_cartesian(xlim = c(0,2), ylim = c(0,.5)) +
+  geom_abline(slope = 1, intercept = 0)
+
+pursuits_pp <- pursuits_bends %>%
+  group_by(ID, drivingmode) %>% 
+  filter(duration < 2) %>% 
+  summarise(med_duration = median(duration),
+            mean_duration = mean(duration),
+            n = n())
+
+ggplot(data = filter(pursuits_bends, duration < 5), aes(y = ID, x = duration)) + 
+  geom_point(alpha =.05) +
+  geom_point(data = pursuits_pp, aes(y = ID, x = med_duration), size = 2, col = "green") +
+  geom_point(data = pursuits_pp, aes(y = ID, x = mean_duration), size = 2, col = "red") +
+  facet_wrap(~drivingmode) +
+  coord_cartesian(xlim = c(0, 1))
+
+ggplot(data = pursuits_pp, aes(y = n, x = factor(drivingmode), col = factor(ID), group = factor(ID))) + 
+  geom_point() +
+  geom_line() 
+
+ggplot(data = pursuits_pp, aes(y = med_duration, x = factor(drivingmode), col = factor(ID), group = factor(ID))) + 
+  geom_point() +
+  geom_line() 
+
+#inspect individual trials.
+pp = 502
+trials <- filter(pursuits_bends, ID == pp)
+trials_long <- filter(segdata_long, ID == pp)
+ggplot(trials_long, aes(x=t, y=th, colour=factor(seg_class), group=seg_i)) + geom_line(size=1.5) +
+  coord_cartesian(ylim = c(.5, 3.5))  +
+  ylab("Time Headway (s)")  + xlab("Time (s)") +
+  scale_color_manual(values=c("blue","red"),
+                     labels=c("Pursuits","Saccades"),
+                     name="", guide = FALSE) +
+  
+  theme_classic() +
+  remove_facets +
+  geom_point(data = trials, aes(x = t1_zero, y = duration+.5, group = trialcode), alpha = .5, col = "black") +
+  geom_line(data = trials, aes(x = t1_zero, y = duration+.5, group = trialcode), alpha = .5, col = "black") +
+  #facet_grid(drivingmode, labeller = labeller(drivingmode = drivingmode.names)) +
+  facet_wrap(~trialcode) 
+  
+  
+
+
+#manuscript figure.
+ggplot(filter(pursuits_bends, duration > 0, duration <5), aes(x = duration, group = factor(drivingmode), col = factor(drivingmode))) + 
+  stat_density(geom="line", position = "identity") +
+  coord_cartesian(xlim = c(0, 1), ylim = c(-.12, 3.5)) +
+  theme_classic() +
+  xlab("Pursuit Duration (s)") +
+  remove_facets +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  theme(legend.position = c(.8,.75),
+       panel.border = element_rect(colour = "black", fill=NA, size=.4),
+       legend.background = element_blank(),
+       panel.background = element_blank(),
+       axis.line = element_blank()) +
+  geom_point(data = pursuits_pp, aes(x = med_duration, y = drivingmode*-.1, col = factor(drivingmode)), alpha = .5) 
+  
+
+#ggsave('pooled_duration.png', plot = last_plot(), width=18, height=8, units = "cm", dpi=300, type = "cairo")
+
+
+ggplot(filter(pursuits_bends, duration > 0, duration <5), aes(x = duration, group = factor(drivingmode), col = factor(drivingmode))) + 
+  stat_density(geom="line", position = "identity") +
+  coord_cartesian(xlim = c(0, 1), ylim = c(-.12, 3.5)) +
+  theme_classic() +
+  xlab("Pursuit Duration (s)") +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  facet_wrap(~ID)
+  
+
+pursuits_overall <- pursuits_pp %>% 
+  ungroup() %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_duration = mean(med_duration),
+            error =  qt(0.975,df=n()-1)*sd(med_duration)/sqrt(n()),
+            ci.l = mn_duration - error,
+            ci.u = mn_duration + error)
+
+ggplot(pursuits_overall, aes(x = drivingmode, y = mn_duration)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+
+ggplot(pursuits_bends, aes(x = duration, group = factor(drivingmode), fill = factor(drivingmode))) + 
+  #stat_density(geom="line", position = "identity", size = 1.5) +
+  geom_histogram(aes(y = ..density..), alpha = .4, position = "identity") +
+  theme_classic() +
+  scale_x_continuous(limits = c(0, 1))+
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  #xlab(expression('\nSmooth Pursuit Speed ('*degree*'/s)')) 
+  xlab('\nSmooth Pursuit Duration (s)') 
+
+
+
+#median for each trial.
+#mean across trials.
+#mean across participatns
+pursuits_spread <- pursuits_bends %>% 
+  group_by(ID, drivingmode, trialcode) %>% 
+  summarise(med_duration = median(duration)) %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(duration = mean(med_duration)) %>% 
+  spread(drivingmode, duration) %>% 
+  rename(Active = '0',
+         Passive_Replay = '1',
+         Passive_Stock = '2')
+  
+            
+#ggplot(pursuits_spread, aes(x=factor(drivingmode), y = speed, group = ID, col = factor(ID))) +
+#  geom_point(alpha = .25) +
+#  geom_path()
+head(pursuits_spread)  
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Stock, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(pursuits_spread, aes(y = Passive_Stock, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+
+purs_cors <- pursuits_spread %>% 
+  ungroup() %>% 
+  arrange(ID) %>% 
+  summarise(R_act_rep = cor.test(Active, Passive_Replay, method = "spearman")$estimate,
+            R_act_rep_p = cor.test(Active, Passive_Replay, method = "spearman")$p.value,
+            R_act_stock = cor.test(Active, Passive_Stock, method = "spearman")$estimate,
+            R_act_stock_p = cor.test(Active, Passive_Stock, method = "spearman")$p.value,
+            R_rep_stock = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$estimate,
+            R_rep_stock_p = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$p.value)
+
+purs_cors
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Replay)) +
+     geom_point(alpha = 1, col = smooth_color, size = 3) +
+  geom_abline(slope = 1, linetype = "dashed", col = "gray") +
+  xlab("Replay") + ylab("Active") +
+ # ylim(.1,NA) + xlim(.1,NA) +
+  #scale_x_continuous(breaks = c("-.7" = -0.7, "-.6" = -0.6, "-.5"= -0.5, "-.4" = -0.4)) +
+  #scale_y_continuous(breaks = c("-.7" = -0.7, "-.6" = -0.6, "-.5"= -0.5, "-.4" = -0.4)) +
+  theme_classic() +
+  theme(panel.grid.major.y = element_blank()) +
+  theme(axis.title = element_text(face="bold",colour=font_color,size="20")) +
+  #annotate("text", x = -.45, y = -.6, label = paste("Spearman: ", round(purs_cors$R_act_rep,2), sep = ""), fontsize = 14) +
+  ggtitle(expression('Pursuit duration ('*degree*'/s)')) +
+  theme(plot.title = element_text(face="bold",colour=smooth_color,size="20"))
+
+#ggsave('purs_speed_correlations.png', plot = last_plot(), width=9, height= 8.5, units = "cm", dpi=300, type = "cairo")
+#ggsave('purs_speed_correlations.svg', plot = last_plot(), width=9, height=8.5, units = "cm", dpi=800)
+
+
+#pursuits2 <- pursuits_bends %>% 
+#  group_by(ID, drivingmode) %>% 
+#  mutate(speed = ang_dist/duration) %>% 
+#  summarise(speed = median(speed),
+#            land_dist = median(th_2))
+  
+#ggplot(pursuits_bends, aes(x = th_diff/duration, y = th_1)) + 
+#  geom_point(alpha = .1) +
+#  geom_vline(xintercept = -1) + xlim(-5, 0)
+  
+#ggplot(pursuits_bends, aes(x = th_diff * 8))  +geom_density()
+
+```
+
+
+```{r bayes model of smooth pursuit duration}
+
+fit_data <- filter(pursuits_bends, duration < 1)
+fit_data$drivingmode <- as.factor(fit_data$drivingmode)
+
+pursuits_pp$drivingmode <- as.factor(pursuits_pp$drivingmode)
+bf3 <- bf(duration ~ 1 + drivingmode + (1+drivingmode | ID))
+m.purs.ln <- brm(data = fit_data, formula = bf3,
+          family = lognormal(),
+          iter = 20000, cores = 4, refresh = 500, chains = 1, warmup = 2000,control = list(adapt_delta = 0.99))
+#load('m.purs.ln.rda')
+save(m.purs.ln, file ='m.purs.ln.rda')
+
+summary(m.purs.ln)
+pp_check(m.purs.ln)
+
+m.purs.exgauss <- brm(data = fit_data, formula = bf3,
+          family = exgaussian(),
+          iter = 20000, cores = 4, refresh = 500, chains = 1, warmup = 2000,control = list(adapt_delta = 0.99))
+
+
+summary(m.purs.exgauss)
+pp_check(m.purs.exgauss)
+loo_model_weights(m.purs.ln, m.purs.exgauss)
+
+drivingmode <- c("0","1","2")
+ID <- c(501:511)
+pred_list <- expand_grid(drivingmode, ID)
+predicted <- pred_list %>% 
+  add_predicted_draws(m.purs.ln)
+
+condition_meds <- predicted %>% 
+  group_by(drivingmode, ID) %>% 
+  summarise(med = median(.prediction))
+
+
+pursuits_overall <- pursuits_pp %>% 
+  ungroup() %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_duration = mean(mean_duration),
+            error =  qt(0.975,df=n()-1)*sd(mean_duration)/sqrt(n()),
+            ci.l = mn_duration - error,
+            ci.u = mn_duration + error)
+
+ggplot(pursuits_overall, aes(x = drivingmode, y = mn_duration)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+
+ggplot(filter(predicted, drivingmode == 2), aes(x = .prediction)) +
+  stat_density(geom="line", position="identity") +
+  geom_histogram(data = filter(fit_data, drivingmode == 2), binwidth = .05, aes(x = duration, y = ..density..), alpha = .5) +
+  facet_wrap(~ID) +
+  coord_cartesian(xlim = c(0,1.5))
+
+ggplot(predicted, aes(x = .prediction, group = drivingmode, colour = drivingmode)) +
+  stat_density(geom="line", position="identity") +
+  coord_cartesian(xlim = c(0, 1), ylim = c(-.12, 3.5)) +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+    theme(legend.position = c(.8,.75),
+       panel.border = element_rect(colour = "black", fill=NA, size=.4),
+       legend.background = element_blank(),
+       panel.background = element_blank(),
+       axis.line = element_blank()) +
+  geom_point(data = condition_meds, aes(x = med, y = as.numeric(drivingmode)*-.1, col = factor(drivingmode)), alpha = .5) 
+
+ggsave('predictions_duration.png', plot = last_plot(), width=18, height=8, units = "cm", dpi=300, type = "cairo")
+
+drivingmode <- c("0","1","2")
+#ppid <- c(501:511)
+#pred_list <- expand_grid(drivingmode, ppid)
+dm <- as.data.frame(drivingmode)
+condition_means <- fitted(m.purs.ln, newdata = dm, re_formula = NA, summary = TRUE) %>% 
+  cbind(dm, .)
+  
+ggplot(condition_means, aes(x = drivingmode, y = Estimate))+
+  geom_pointrange(aes(ymin = Q2.5, ymax = Q97.5))
+
+#contrasts.
+draws <- dm %>% 
+    add_fitted_draws(m.purs.ln, re_formula = NA, summary = FALSE)
+
+contrast_df <- draws %>% 
+    group_by(.draw) %>% 
+    summarise(stockpas = .value[3] - .value[2],
+            stockact = .value[3] - .value[1],
+            pasact = .value[2] - .value[1]) %>% 
+    gather(key = "dm", value = "ct", -.draw)
+
+contrast_df %>% 
+  group_by(dm) %>% 
+  mean_hdi(ct)
+
+
+
+hdis <- calc_hdis(contrast_df)
+
+col_line = "grey60"
+pursuitp <- ggplot(contrast_df, aes(x=ct, y=factor(dm))) + 
+  geom_density_ridges(colour=col_line, fill = "white", scale=.55, rel_min_height=.015, size = 1)  + 
+  geom_vline(xintercept=0, linetype="dashed") + 
+  geom_segment(data=hdis, aes(x=HDI2.5, y=as.numeric(factor(dm)), xend=HDI97.5, yend=as.numeric(factor(dm))), size=1) + 
+  geom_point(data=hdis, aes(x=mn, y=as.numeric(factor(dm))), size=2) +
+  geom_text(data = hdis, aes(x = mn, y = factor(dm), label = ifelse(AboveZero>BelowZero, paste(round(AboveZero*100, digits = 1), "%>0", sep=""),paste(round(BelowZero*100,digits = 1), "%<0", sep="") )), vjust=-2, hjust=.4, size=2) +
+  scale_y_discrete(labels = c("", "", "")) +
+  labs(y="", x = "Pursuit Duration difference (s)") +
+  theme_classic()+
+  coord_cartesian(clip = "off") +#, xlim = c(-.25, .7)) +
+  scale_x_continuous(breaks = c(-.1,0,.1,.2,.3),labels=c("-.1","0",".1",".2",".3")) +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=.4),
+       legend.background = element_blank(),
+       panel.background = element_blank(),
+       axis.line = element_blank()) 
+
+
+myplot <- plot_grid(launchp, landp, pursuitp, labels = c("A","B","C"), label_x = c(.3,.15,.15), label_y = .97, nrow = 1, rel_widths = c(1.25,1,1))
+
+print(myplot)  
+print(pursuitp)
+#ggsave('pursuit_duration.png', plot = last_plot(), width=18, height=10, units = "cm", dpi=300, type = "cairo")
+ggsave('sawtooth_contrasts.png', plot = myplot, width=19, height=8, units = "cm", dpi=300, type = "cairo")
+```
+```{r, correlating half_yr and h_vel}
+
+smooth_purs <- seg_concat_data %>% 
+  filter(seg_class == 1) %>% 
+  mutate(duration = abs(t2 - t1))
+
+ggplot(smooth_purs, aes(x = duration, y = h_vel)) +
+  geom_point(alpha = .1) +
+  xlim(0,1)
+
+
+ggplot(filter(smooth_purs, ID == 502), aes(x = -half_yr, y = h_vel)) +
+  geom_point(alpha = .1) +
+  facet_grid(ID~drivingmode) +
+#  xlim(5,15) + ylim(-25,10) +
+  #coord_fixed(ratio = 1) +
+  geom_abline(slope = 1, intercept = 0)
+
+ggplot(filter(smooth_purs, duration > .2), aes(x = -half_yr, y = ..density..))+ 
+  geom_histogram(alpha = .3) +
+  geom_histogram(aes(x = h_vel, y = ..density..), alpha = .3, fill = "blue") +
+  xlim(-25, 25)
+  
+
+ggplot(smooth_purs, aes(x = -half_yr, y= h_vel)) +
+  geom_point(alpha = .2) +
+  geom_abline(slope = 1, intercept = 0)
+
+```
+
+
+
+
+```{r correlating number of backwards saccades}
+
+#segment_data <- filter(segment_data, roadsection %in% c(0, 1, 2))
+
+
+
+saccade_back_trial <- seg_concat_data %>% 
+  filter(roadsection %in% c(1), drivingmode %in% c(0,1,2), seg_class ==2, forwards == 0, ID != 506) %>% 
+  group_by(trialcode) %>% 
+  summarise(n_back = n(),
+            ID = first(ID),
+            drivingmode = first(drivingmode),
+            duration = last(t2_zero) - first(t1_zero),
+            lookback_freq = n_back / duration)
+
+head(saccade_back_trial)
+
+#n_backs
+seg_pp <- saccade_back_trial %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(mean_n_back = mean(n_back))
+
+seg_overall <- seg_pp %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_n_back = mean(mean_n_back),
+            error =  qt(0.975,df=n()-1)*sd(mean_n_back)/sqrt(n()),
+            ci.l = mn_n_back - error,
+            ci.u = mn_n_back + error)
+
+ggplot(seg_overall, aes(x = drivingmode, y = mn_n_back)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+
+
+#lookbacks frequency
+seg_pp <- saccade_back_trial %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(mean_lookback_freq = median(lookback_freq))
+
+ggplot(seg_pp, aes(x = ID, y = mean_lookback_freq)) +
+  geom_point(alpha = .2)
+
+seg_overall <- seg_pp %>% 
+  ungroup() %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_lb_freq = mean(mean_lookback_freq),
+            error =  qt(0.975,df=n()-1)*sd(mean_lookback_freq)/sqrt(n()),
+            ci.l = mn_lb_freq - error,
+            ci.u = mn_lb_freq + error)
+
+ggplot(seg_overall, aes(x = drivingmode, y = mn_lb_freq)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+  
+
+ggplot(saccade_back_trial, aes(x = factor(drivingmode), y = n_back, group = factor(drivingmode))) +
+  geom_point(alpha = .2)
+
+ggplot(saccade_back_trial, aes(x = n_back, group = factor(drivingmode), fill = factor(drivingmode))) +
+  geom_histogram(aes(y = ..density..), alpha = .4, position = "identity") +
+  theme_classic() +
+  #scale_x_continuous(limits = c(0, 10), breaks = c(0, 1, 2, 3, 4, 5, 7.5, 10), labels = roundlabels) +
+  scale_fill_manual(values=c("purple","green", "cyan"),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  xlab("\nNumber of Backwards Saccades") 
+
+#ggsave('saccade_nback_density.png', plot = last_plot(), width=20, height=15, units = "cm", dpi=300, type = "cairo")
+  
+
+ggplot(seg_pp, aes(x=factor(drivingmode), y = mean_n_back, group = ID, col = factor(ID))) +
+  geom_point(alpha = .25) +
+  geom_path()
+
+
+sacc_spread <- seg_pp %>%
+  ungroup() %>%
+  spread(drivingmode, mean_n_back) %>% 
+  rename(Active = '0',
+         Passive_Replay = '1',
+         Passive_Stock = '2')
+
+ggplot(sacc_spread, aes(y = Active, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+ # ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(sacc_spread, aes(y = Active, x = Passive_Stock, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+  #ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(sacc_spread, aes(y = Passive_Stock, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+  #ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+cors<-sacc_spread %>% 
+  ungroup() %>% 
+  arrange(ID) %>% 
+  summarise(R_act_rep = cor.test(Active, Passive_Replay, method = "spearman")$estimate,
+            R_act_rep_p = cor.test(Active, Passive_Replay, method = "spearman")$p.value,
+            R_act_stock = cor.test(Active, Passive_Stock, method = "spearman")$estimate,
+            R_act_stock_p = cor.test(Active, Passive_Stock, method = "spearman")$p.value,
+            R_rep_stock = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$estimate,
+            R_rep_stock_p = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$p.value)
+cors
+
+ggplot(sacc_spread, aes(y = Active, x = Passive_Replay)) +
+     geom_point(alpha = 1, col = "mediumpurple", size = 3) +
+  geom_abline(slope = 1, linetype = "dashed", col = "gray") +
+  xlab("Passive-Replay") + ylab("Active") +
+ # ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed() +
+  theme_classic() +
+  theme(panel.grid.major.y = element_blank()) +
+  annotate("text", x = 10, y = 4, label = paste("Spearman's R: ", round(cors$R_act_rep,2), sep = ""))
+
+#ggsave('sacc_num_correlations.png', plot = last_plot(), width=10, height=10, units = "cm", dpi=300, type = "cairo")
+```
+
+```{r correlating smooth pursuit speed}
+
+#segment_data <- filter(segment_data, roadsection %in% c(0, 1, 2))
+pursuits_bends <- seg_concat_data %>% 
+  filter(seg_class %in% c(1,4), roadsection %in% c(1), forwards == 0, drivingmode < 3) %>%  #smooth pursuits and fixations, bends, landing within 5 degrees of the future path, only the pursuits coming towards you
+  mutate(ang_dist = sqrt( (h1 - h2)^2 + (v1 - v2)^2),
+         duration = t2 - t1)
+
+head(pursuits_bends)
+
+ggplot(pursuits_bends, aes(x = ang_dist, y = duration)) + 
+  geom_point(alpha = .1) +
+  xlim(NA,5) + ylim(0,2) + 
+  facet_wrap(~ID)
+
+ggplot(pursuits_bends, aes(x = ang_dist / duration, group = factor(drivingmode), col = factor(drivingmode))) + 
+  stat_density(geom="line", position = "identity", size = 1.5) +
+  theme_classic() +
+  #scale_x_continuous(limits = c(0, 10), breaks = c(0, 1, 2, 3, 4, 5, 7.5, 10), labels = roundlabels) +
+  scale_color_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  #xlab(expression('\nSmooth Pursuit Speed ('*degree*'/s)')) 
+  xlab('\nSmooth Pursuit Speed (?/s)') 
+
+
+
+  
+#ggsave('pursuit_bends_hfes.png', plot = last_plot(), width=20, height=15, units = "cm", dpi=300, type = "cairo")
+
+pursuits_trial <- pursuits_bends %>% 
+  group_by(trialcode) %>% 
+  mutate(speed = th_diff / duration * -1) %>% 
+  summarise(ID = first(ID),
+            drivingmode = first(drivingmode),
+            speed = median(speed))
+
+pursuits_pp <- pursuits_trial %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(speed = mean(speed))
+
+
+pursuits_overall <- pursuits_pp %>% 
+  ungroup() %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_speed = mean(speed),
+            error =  qt(0.975,df=n()-1)*sd(speed)/sqrt(n()),
+            ci.l = mn_speed - error,
+            ci.u = mn_speed + error)
+
+ggplot(pursuits_overall, aes(x = drivingmode, y = mn_speed)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+
+#median for each trial.
+#mean across trials.
+#mean across participatns
+pursuits_spread <- pursuits_bends %>% 
+  group_by(ID, drivingmode, trialcode) %>% 
+  mutate(speed = th_diff / duration) %>% 
+  summarise(med_speed = median(speed)) %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(speed = mean(med_speed)) %>% 
+  spread(drivingmode, speed) %>% 
+  rename(Active = '0',
+         Passive_Replay = '1',
+         Passive_Stock = '2')
+  
+            
+#ggplot(pursuits_spread, aes(x=factor(drivingmode), y = speed, group = ID, col = factor(ID))) +
+#  geom_point(alpha = .25) +
+#  geom_path()
+head(pursuits_spread)  
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Stock, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(pursuits_spread, aes(y = Passive_Stock, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+#  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+
+purs_cors <- pursuits_spread %>% 
+  ungroup() %>% 
+  arrange(ID) %>% 
+  summarise(R_act_rep = cor(Active, Passive_Replay, method = "spearman"),
+            R_act_stock = cor(Active, Passive_Stock, method = "spearman"),
+            R_rep_stock = cor(Passive_Replay, Passive_Stock, method = "spearman"))
+
+purs_cors
+
+ggplot(pursuits_spread, aes(y = Active, x = Passive_Replay)) +
+     geom_point(alpha = 1, col = smooth_color, size = 3) +
+  geom_abline(slope = 1, linetype = "dashed", col = "gray") +
+  xlab("Replay") + ylab("Active") +
+ # ylim(.1,NA) + xlim(.1,NA) +
+  scale_x_continuous(breaks = c("-.7" = -0.7, "-.6" = -0.6, "-.5"= -0.5, "-.4" = -0.4)) +
+  scale_y_continuous(breaks = c("-.7" = -0.7, "-.6" = -0.6, "-.5"= -0.5, "-.4" = -0.4)) +
+  theme_classic() +
+  theme(panel.grid.major.y = element_blank()) +
+  theme(axis.title = element_text(face="bold",colour=font_color,size="20")) +
+  annotate("text", x = -.45, y = -.6, label = paste("Spearman: ", round(purs_cors$R_act_rep,2), sep = ""), fontsize = 14) +
+  ggtitle(expression('Pursuit Speed ('*degree*'/s)')) +
+  theme(plot.title = element_text(face="bold",colour=smooth_color,size="20"))
+
+#ggsave('purs_speed_correlations.png', plot = last_plot(), width=9, height= 8.5, units = "cm", dpi=300, type = "cairo")
+#ggsave('purs_speed_correlations.svg', plot = last_plot(), width=9, height=8.5, units = "cm", dpi=800)
+
+
+pursuits2 <- pursuits_bends %>% 
+  group_by(ID, drivingmode) %>% 
+  mutate(speed = ang_dist/duration) %>% 
+  summarise(speed = median(speed),
+            land_dist = median(th_2))
+  
+ggplot(pursuits_bends, aes(x = th_diff/duration, y = th_1)) + 
+  geom_point(alpha = .1) +
+  geom_vline(xintercept = -1) + xlim(-5, 0)
+  
+ggplot(pursuits_bends, aes(x = th_diff * 8))  +geom_density()
+
+```
+
+
+
+```{r correlating saccade amplitude}
+
+ #saccades, bends, landing within 5 degrees of the future path
+
+
+
+saccade_amp_trial <- seg_concat_data %>% 
+  filter(roadsection %in% c(1), drivingmode %in% c(0,1,2), seg_class == 2, forwards == 1) %>% 
+  group_by(trialcode) %>% 
+  summarise(ID = first(ID),
+            drivingmode = first(drivingmode),
+            med_amp = median(th_diff))
+
+saccade_th_diff_meds <- saccade_amp_trial %>% 
+  ungroup() %>% 
+  group_by(ID, drivingmode) %>% 
+  summarise(med_th_amp = median(med_amp),
+            mean_th_amp = mean(med_amp))
+
+ggplot(saccade_amp_trial, aes(x = med_amp)) + geom_histogram() +
+  geom_vline(data = saccade_th_diff_meds, aes(xintercept = med_th_amp), col = "red") +
+  geom_vline(data = saccade_th_diff_meds, aes(xintercept = mean_th_amp), col = "blue") + 
+  facet_grid(ID~drivingmode)
+
+
+
+saccade_amp_overall <- saccade_th_diff_meds %>% 
+  ungroup() %>% 
+  group_by(drivingmode) %>% 
+  summarise(mn_amp = mean(mean_th_amp),
+            error =  qt(0.975,df=n()-1)*sd(mean_th_amp)/sqrt(n()),
+            ci.l = mn_amp - error,
+            ci.u = mn_amp + error)
+
+ggplot(saccade_amp_overall, aes(x = drivingmode, y = mn_amp)) +
+  geom_pointrange(aes(ymin = ci.l, ymax= ci.u))
+
+
+
+
+ggplot(saccade_amp_trial, aes(x = med_amp, group = factor(drivingmode), fill = factor(drivingmode))) + 
+  #stat_density(geom="line", position = "identity", size = 1.5) +
+  geom_histogram(alpha = .4, position = "identity") +
+  theme_classic() +
+  #scale_x_continuous(limits = c(0, 10), breaks = c(0, 1, 2, 3, 4, 5, 7.5, 10), labels = roundlabels) +
+  scale_fill_manual(values=c(active_color,passive_color, stock_color),
+                     labels=c("0"="Active", "1"="Passive-Replay", "2"="Passive-Stock"),
+                     name="Driving Mode") +
+  #xlab(expression('\nSmooth Pursuit Speed ('*degree*'/s)')) 
+  xlab('\nSaccade Amplitude (s)') 
+
+#ggsave('saccade_amp_hfes.png', plot = last_plot(), width=20, height=15, units = "cm", dpi=800, type = "cairo")
+#ggsave('saccade_amp_hfes.svg', plot = last_plot(), width=20, height=15, units = "cm", dpi=800)
+
+
+head(saccade_th_diff_meds)
+
+sacc_amp_spread <- saccade_th_diff_meds %>%
+  ungroup() %>%
+  select(-med_th_amp) %>% 
+  spread(drivingmode, mean_th_amp) %>% 
+  rename(Active = '0',
+         Passive_Replay = '1',
+         Passive_Stock = '2')
+
+head(sacc_amp_spread)
+
+ggplot(sacc_amp_spread, aes(y = Active, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(sacc_amp_spread, aes(y = Active, x = Passive_Stock, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+ggplot(sacc_amp_spread, aes(y = Passive_Stock, x = Passive_Replay, col = factor(ID))) +
+     geom_point(alpha = .5) +
+  geom_abline(slope = 1) +
+  ylim(.1,NA) + xlim(.1,NA) +
+  coord_fixed()
+
+sacc_cors<- sacc_amp_spread %>% 
+  arrange(ID) %>% 
+  summarise(R_act_rep = cor.test(Active, Passive_Replay, method = "spearman")$estimate,
+            R_act_rep_p = cor.test(Active, Passive_Replay, method = "spearman")$p.value,
+            R_act_stock = cor.test(Active, Passive_Stock, method = "spearman")$estimate,
+            R_act_stock_p = cor.test(Active, Passive_Stock, method = "spearman")$p.value,
+            R_rep_stock = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$estimate,
+            R_rep_stock_p = cor.test(Passive_Replay, Passive_Stock, method = "spearman")$p.value)
+
+sacc_cors
+
+ggplot(sacc_amp_spread, aes(y = Active, x = Passive_Replay)) +
+     geom_point(alpha = 1, col = saccade_color, size = 3) +
+  geom_abline(slope = 1, linetype = "dashed", col = "gray") +
+  xlab("Replay") + ylab("Active") +
+ # ylim(.1,NA) + xlim(.1,NA) +
+  scale_x_continuous(breaks = c(".2" = 0.2, ".3"= 0.3, ".4" = 0.4, ".5" = 0.5)) +
+  scale_y_continuous(breaks = c(".2" = 0.2, ".3"= 0.3, ".4" = 0.4, ".5" = 0.5)) +
+  theme_classic() +
+  theme(panel.grid.major.y = element_blank()) +
+  theme(axis.title = element_text(face="bold",colour=font_color,size="20")) +
+  annotate("text", x = .25, y = .45, label = paste("Spearman: ", round(sacc_cors$R_act_rep,2), sep = ""), fontsize = 14) +
+  ggtitle(expression('Saccade Amplitude ('*degree*')')) +
+  theme(plot.title = element_text(face="bold",colour=saccade_color,size="20"))
+
+#ggsave('sacc_amp_correlations.png', plot = last_plot(), width=9, height= 8.5, units = "cm", dpi=300, type = "cairo")
+#ggsave('sacc_amp_correlations.svg', plot = last_plot(), width=9, height=8.5, units = "cm", dpi=800)
+
+
+```
+
+
+
+
+
+
+
