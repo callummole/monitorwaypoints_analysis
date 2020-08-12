@@ -1,10 +1,6 @@
 # Data Dictionary
 
-The Data is held on the OSF: https://osf.io/f2n4c/.
-
-The scripts in the *Processing* folder produce a csv of stitched gaze and steering data. This csv is named something like: 'GazeAndSteering_longformat_XXXX.csv'. 
-
-For analysis in R the original csv has underwent further grooming with the *Post-processing* script 'tidy_data_for_analysis.R'. This saves the files 'steergazedata_fulltrials' as a csv or a rds (R binary file, much quicker to deal with than csv if you are using R). You will want to use the steergazedata files for the majority of your analysis. 
+The Data is held on the OSF: https://osf.io/f2n4c/. 
 
 
 ### STEERGAZEDATA 
@@ -12,13 +8,11 @@ For analysis in R the original csv has underwent further grooming with the *Post
 **_Columns not necessarily in order_**
 
 
-1) **Unnamed**: Monotically increasing index. Does not start from zero as some data is cut when syncing gaze and steering time-ranges
-
 2) **ID**: participant id used for testing
 
 3) **Age**: Participant age
 
-4) **Gender**: 99=not responded, 1=Female, 2=Male, 3=Other, 4=Prefer not to say. *In 100918 dataset 0=not responded*
+4) **Gender**: 99=not responded, 1=Female, 2=Male, 3=Other, 4=Prefer not to say. 
 
 5) **Vision**: Qu "Wearing contacts or glasses for testing". 99=not responded, 1:Yes, 2:No
 
