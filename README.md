@@ -2,7 +2,7 @@ Analysis repo for preprint: Mole et al. (2020), _Drivers use active gaze to moni
 
 This repo contains all the files needed to process the raw data, hosted on OSF (https://osf.io/f2n4c/), through to the figures in the manuscript.
 
-You could begin from the raw video files using main_pipeline.py. The code is very inefficient so the processing is incredibly slow. Or you could begin from the processed video files (_ProcessedData.zip_ on OSF), just extract them to the Data folder.
+Due to privacy issues we have not made the raw eye video files available online. However, you can rerun the analysis pipeline from the processed video files (_ProcessedData.zip_ on OSF), just extract them to the Data folder.
 
 Key files are listed below.
 
